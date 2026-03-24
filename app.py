@@ -943,83 +943,138 @@ with tab5:
         with rl_col2:
             rl_period = st.selectbox("Periyot", ["1y", "2y", "3y"], index=1, key="rl_period")
 
+        rl_compare = st.checkbox("Kural tabanlı stratejiyle karşılaştır (yavaş ~1-2 dk)", value=False, key="rl_compare")
+
         if st.button("▶️ RL Backtest Çalıştır", type="primary", key="rl_run"):
             from rl_backtester import run_rl_backtest
 
             with st.spinner(f"RL ajanı {rl_symbol} üzerinde test ediliyor..."):
                 rl_res = run_rl_backtest(rl_symbol, period=rl_period)
 
+            # Kural tabanlı backtest (opsiyonel)
+            kb_res = None
+            if rl_compare:
+                with st.spinner(f"Kural tabanlı strateji {rl_symbol} üzerinde test ediliyor..."):
+                    from backtester import run_backtest
+                    kb_res = run_backtest(rl_symbol, period=rl_period)
+
             if rl_res.get("status") != "ok":
                 st.error(f"Backtest başarısız: {rl_res.get('status')}")
             else:
-                # ── Özet metrikler ─────────────────────────────────────────
-                m1, m2, m3, m4, m5 = st.columns(5)
                 ret = rl_res["total_return_pct"]
                 bh  = rl_res["buy_and_hold_pct"]
-                m1.metric("RL Getiri", f"%{ret:+.1f}",
-                           delta=f"{ret - bh:+.1f}% vs B&H")
-                m2.metric("Buy & Hold", f"%{bh:+.1f}")
-                m3.metric("İşlem Sayısı", rl_res["n_trades"])
-                m4.metric("Win Rate", f"%{rl_res['win_rate']:.0f}")
-                m5.metric("Max Drawdown", f"%{rl_res['max_drawdown']:.1f}")
 
-                # ── Portfolio curve + Al/Sat işaretleri ────────────────────
+                # ── 3'lü karşılaştırma metrikleri ──────────────────────────
+                if kb_res:
+                    kb_ret = kb_res["total_return_pct"]
+                    st.subheader("📊 Karşılaştırma")
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("🤖 RL Ajanı",        f"%{ret:+.1f}",
+                               delta=f"{ret - bh:+.1f}% vs B&H")
+                    c2.metric("📐 Kural Tabanlı",    f"%{kb_ret:+.1f}",
+                               delta=f"{kb_ret - bh:+.1f}% vs B&H")
+                    c3.metric("📈 Buy & Hold",       f"%{bh:+.1f}")
+                    d1, d2, d3 = st.columns(3)
+                    d1.metric("RL Sharpe",           f"{rl_res['sharpe']:.2f}")
+                    d2.metric("KB Sharpe",           f"{kb_res['sharpe']:.2f}")
+                    d1.metric("RL Max Düşüş",        f"%{rl_res['max_drawdown']:.1f}")
+                    d2.metric("KB Max Düşüş",        f"%{kb_res['max_drawdown_pct']:.1f}")
+                    d1.metric("RL İşlem / Win",      f"{rl_res['n_trades']} / %{rl_res['win_rate']:.0f}")
+                    d2.metric("KB İşlem / Win",      f"{kb_res['total_trades']} / %{kb_res['win_rate']:.0f}")
+                else:
+                    m1, m2, m3, m4, m5 = st.columns(5)
+                    m1.metric("RL Getiri", f"%{ret:+.1f}",
+                               delta=f"{ret - bh:+.1f}% vs B&H")
+                    m2.metric("Buy & Hold", f"%{bh:+.1f}")
+                    m3.metric("İşlem Sayısı", rl_res["n_trades"])
+                    m4.metric("Win Rate", f"%{rl_res['win_rate']:.0f}")
+                    m5.metric("Max Drawdown", f"%{rl_res['max_drawdown']:.1f}")
+
+                # ── Grafik ─────────────────────────────────────────────────
                 curve  = rl_res.get("portfolio_curve")
                 trades = rl_res.get("trades", [])
+                initial_capital = 100_000.0
+
                 if curve is not None and len(curve) > 0:
                     import plotly.graph_objects as go
                     fig_rl = go.Figure()
 
-                    # Ana portfolio çizgisi
+                    # RL portfolio çizgisi
                     fig_rl.add_trace(go.Scatter(
                         x=curve.index, y=curve.values,
-                        name="RL Portfolio",
+                        name="RL Ajanı",
                         line=dict(color="#3498db", width=2),
                         hovertemplate="%{x|%d %b %Y}<br>%{y:,.0f} TL<extra></extra>",
                     ))
 
-                    # AL işaretleri (yeşil üçgen ▲)
-                    buy_dates = [t["buy_date"]  for t in trades if t.get("buy_date")]
-                    buy_vals  = [curve.asof(d)  for d in buy_dates if d in curve.index or True]
+                    # Kural tabanlı eğrisi
+                    if kb_res and "df" in kb_res:
+                        kb_eq = kb_res["df"]["Equity"].dropna()
+                        # RL ile aynı başlangıç noktasına normalize et
+                        if len(kb_eq) > 0:
+                            kb_eq = kb_eq * (initial_capital / kb_eq.iloc[0])
+                            fig_rl.add_trace(go.Scatter(
+                                x=kb_eq.index, y=kb_eq.values,
+                                name="Kural Tabanlı",
+                                line=dict(color="#f39c12", width=2, dash="dot"),
+                                hovertemplate="%{x|%d %b %Y}<br>%{y:,.0f} TL<extra></extra>",
+                            ))
+
+                    # B&H referans çizgisi
+                    if len(curve) > 0:
+                        from rl_backtester import run_rl_backtest as _rl  # noqa
+                        import yfinance as yf
+                        try:
+                            _bh_df = yf.Ticker(rl_symbol).history(period=rl_period, interval="1d")
+                            if not _bh_df.empty:
+                                _bh_close = _bh_df["Close"].loc[curve.index[0]:curve.index[-1]]
+                                _bh_curve = initial_capital * _bh_close / _bh_close.iloc[0]
+                                fig_rl.add_trace(go.Scatter(
+                                    x=_bh_curve.index, y=_bh_curve.values,
+                                    name="Buy & Hold",
+                                    line=dict(color="#95a5a6", width=1, dash="dash"),
+                                    hovertemplate="%{x|%d %b %Y}<br>%{y:,.0f} TL<extra></extra>",
+                                ))
+                        except Exception:
+                            pass
+
+                    # AL işaretleri
+                    buy_dates = [t["buy_date"] for t in trades if t.get("buy_date")]
                     buy_vals  = [curve.iloc[curve.index.get_indexer([d], method="nearest")[0]]
                                  for d in buy_dates]
                     if buy_dates:
                         fig_rl.add_trace(go.Scatter(
-                            x=buy_dates, y=buy_vals,
-                            mode="markers",
-                            name="AL",
+                            x=buy_dates, y=buy_vals, mode="markers", name="AL",
                             marker=dict(symbol="triangle-up", color="#2ecc71", size=14,
                                         line=dict(color="white", width=1)),
                             hovertemplate="AL<br>%{x|%d %b %Y}<br>%{y:,.0f} TL<extra></extra>",
                         ))
 
-                    # SAT işaretleri (kırmızı üçgen ▼)
+                    # SAT işaretleri
                     sell_dates = [t["sell_date"] for t in trades if t.get("sell_date")]
                     sell_vals  = [curve.iloc[curve.index.get_indexer([d], method="nearest")[0]]
                                   for d in sell_dates]
                     if sell_dates:
                         fig_rl.add_trace(go.Scatter(
-                            x=sell_dates, y=sell_vals,
-                            mode="markers",
-                            name="SAT",
+                            x=sell_dates, y=sell_vals, mode="markers", name="SAT",
                             marker=dict(symbol="triangle-down", color="#e74c3c", size=14,
                                         line=dict(color="white", width=1)),
                             hovertemplate="SAT<br>%{x|%d %b %Y}<br>%{y:,.0f} TL<extra></extra>",
                         ))
 
                     fig_rl.update_layout(
-                        title=f"RL Ajanı Portfolio — {rl_symbol}",
+                        title=f"Strateji Karşılaştırması — {rl_symbol}",
                         template="plotly_dark",
                         xaxis_title="Tarih",
                         yaxis_title="Portföy Değeri (TL)",
-                        height=450,
+                        height=480,
                         legend=dict(orientation="h", y=1.05),
                     )
                     st.plotly_chart(fig_rl, use_container_width=True)
 
                 # ── İşlem listesi ───────────────────────────────────────────
                 if trades:
-                    st.subheader(f"📋 İşlemler ({len(trades)} adet)")
+                    st.subheader(f"📋 RL İşlemleri ({len(trades)} adet)")
                     tr_df = pd.DataFrame(trades)
                     def _color_pnl(val):
                         return f"color: {'#2ecc71' if val > 0 else '#e74c3c'}; font-weight: bold"
