@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -l \"def \" \"c:/Users/erdem/OneDrive/Desktop/project/Tradebot v1\"/*.py)",
+      "Bash(for f:*)",
+      "Bash(do echo:*)",
+      "Read(//c/Users/erdem/OneDrive/Desktop/project/Tradebot v1/**)",
+      "Bash(done)",
+      "Bash(rm -f prophet_ensemble.py news_fetcher.py notifier.py debug_merge.py test_xgb_triple.py test_xgb_integration.py test_cnn_integration.py test_idx.py error.log error.txt pip_out.txt pip_ta_out.txt models/tradebot_lstm.keras)",
+      "Bash(rm -rf backup_nextjs)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:dl.acm.org)"
+    ]
+  }
+}
