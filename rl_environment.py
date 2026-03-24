@@ -27,6 +27,8 @@ from indicators import (
 TRANSACTION_COST  = 0.001   # %0.1 alış + satış komisyonu
 DRAWDOWN_PENALTY  = 0.002   # portföy peak'inden %5+ düşüş cezası
 POS_DD_PENALTY    = 0.004   # pozisyon içi peak'ten %8+ düşüş cezası (trailing stop öğretir)
+MIN_HOLD_DAYS     = 10      # erken satış cezası eşiği (bar sayısı)
+EARLY_SELL_PENALTY = 0.005  # 10 günden önce satışa ceza
 
 
 def _compute_features(df: pd.DataFrame, bist100_returns: pd.Series = None) -> pd.DataFrame:
@@ -221,10 +223,13 @@ class BISTTradingEnv(gym.Env):
         elif action == 2 and self.shares > 0:         # SAT
             revenue      = self.shares * price * (1 - TRANSACTION_COST)
             self.capital = revenue
+            early_sell   = self.days_held < MIN_HOLD_DAYS  # erken satış flag
             self.shares  = 0.0
             self.buy_price    = 0.0
             self.position_peak = 0.0
             cost = self.initial_capital * TRANSACTION_COST
+            if early_sell:
+                cost += self.initial_capital * EARLY_SELL_PENALTY
 
         if self.shares > 0:
             self.days_held += 1
@@ -256,7 +261,7 @@ class BISTTradingEnv(gym.Env):
         else:
             pos_dd_penalty = 0.0
 
-        reward = excess_return - dd_penalty - pos_dd_penalty - (cost / self.initial_capital)
+        reward = 5.0 * excess_return - dd_penalty - pos_dd_penalty - (cost / self.initial_capital)
         reward = float(np.clip(reward, -1.0, 1.0))
 
         self.portfolio_val = new_val
