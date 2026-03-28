@@ -80,13 +80,29 @@ def _compute_features(df: pd.DataFrame, bist100_returns: pd.Series = None) -> pd
     bb_width = (bb_upper - bb_lower) / close
 
     # ── Hacim oranı ──────────────────────────────────────────────────
+    vol_ma5    = volume.rolling(5).mean()
     vol_ma20   = volume.rolling(20).mean()
     volume_ratio = volume / vol_ma20.replace(0, np.nan)
+    vol_trend  = vol_ma5 / vol_ma20.replace(0, np.nan)   # hacim ivmesi
 
     # ── Getiriler ────────────────────────────────────────────────────
     ret1  = close.pct_change(1)
     ret5  = close.pct_change(5)
     ret20 = close.pct_change(20)
+
+    # ── EMA crossover ────────────────────────────────────────────────
+    ema9  = calculate_ema(close, 9)
+    ema21 = calculate_ema(close, 21)
+    ema_cross = ((ema9 - ema21) / close).clip(-0.05, 0.05) / 0.05  # -1..+1
+
+    # ── RSI eğimi (5 günlük) ─────────────────────────────────────────
+    rsi_slope = (rsi - rsi.shift(5)).clip(-30, 30) / 30  # -1..+1
+
+    # ── 52 haftalık pozisyon ─────────────────────────────────────────
+    high52 = close.rolling(252).max()
+    low52  = close.rolling(252).min()
+    rng52  = (high52 - low52).replace(0, np.nan)
+    pos52w = ((close - low52) / rng52).clip(0, 1)  # 0=dip 1=zirve
 
     # ── Piyasa bağlamı ───────────────────────────────────────────────
     if bist100_returns is not None:
@@ -113,8 +129,14 @@ def _compute_features(df: pd.DataFrame, bist100_returns: pd.Series = None) -> pd
         "f_atr_price":     (atr / close).clip(0, 0.1) / 0.1,
         "f_bb_width":      bb_width.clip(0, 0.2) / 0.2,
 
-        # Hacim (1)
+        # Hacim (2)
         "f_vol_ratio":     volume_ratio.clip(0, 5) / 5,
+        "f_vol_trend":     vol_trend.clip(0, 3) / 3,     # YENİ: hacim ivmesi
+
+        # Trend sinyalleri (3) — YENİ
+        "f_ema_cross":     ema_cross,                    # EMA 9/21 crossover
+        "f_rsi_slope":     rsi_slope,                    # RSI eğimi (ivme)
+        "f_pos52w":        pos52w.fillna(0.5),           # 52h pozisyon
 
         # Piyasa (1)
         "f_bist_ret5":     bist_ret5.clip(-0.15, 0.15) / 0.15,
@@ -124,7 +146,7 @@ def _compute_features(df: pd.DataFrame, bist100_returns: pd.Series = None) -> pd
     return feat.fillna(0.0)
 
 
-N_FEATURES = 14 + 5  # 14 piyasa feature + 5 pozisyon feature
+N_FEATURES = 18 + 5  # 18 piyasa feature + 5 pozisyon feature
 
 
 class BISTTradingEnv(gym.Env):

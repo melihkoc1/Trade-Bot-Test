@@ -111,7 +111,7 @@ def train(symbols=None, timesteps=1_000_000):
     if os.path.exists(existing):
         print(f"Mevcut model yükleniyor: {existing}")
         model = PPO.load(existing, env=train_vec, device="cpu")
-        model.learning_rate = 3e-4
+        model.learning_rate = 5e-5  # fine-tune: yüksek lr modeli "unutturur"
     else:
         print("Yeni model olusturuluyor...")
         model = PPO(
