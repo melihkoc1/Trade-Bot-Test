@@ -13,6 +13,7 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from rl_environment import BISTTradingEnv
+from indicators import calculate_sma
 
 MODEL_PATH  = "models/ppo_tradebot.zip"
 BEST_PATH   = "models/best_model.zip"
@@ -36,6 +37,8 @@ def run_rl_backtest(
     symbol: str,
     period: str = "2y",
     initial_capital: float = 100_000.0,
+    use_ma200_filter: bool = True,
+    min_fscore: int = 5,
 ) -> dict:
     """
     Eğitilmiş RL ajanını verilen hisse ve periyotta çalıştırır.
@@ -69,6 +72,22 @@ def run_rl_backtest(
     except FileNotFoundError as e:
         return {"symbol": symbol, "status": str(e)}
 
+    # ── Filtreler — önceden hesapla ──────────────────────────────────
+    # 1. MA200 filtresi: fiyat SMA200'ün altındaysa AL sinyali geçersiz
+    sma200_arr = calculate_sma(df["Close"], 200).values if use_ma200_filter else None
+
+    # 2. F-Score filtresi: temel analiz kalitesi yetersizse AL sinyali geçersiz
+    fscore_ok = True
+    if min_fscore > 0:
+        try:
+            from fundamental import get_fscore_filter
+            fscore = get_fscore_filter(symbol)
+            if fscore is not None and fscore < min_fscore:
+                fscore_ok = False
+                print(f"[FİLTRE] {symbol} F-Score={fscore} < {min_fscore} — AL sinyalleri bloke")
+        except Exception as e:
+            print(f"[UYARI] {symbol} F-Score alınamadı: {e}")
+
     # ── Ortam kur ─────────────────────────────────────────────────────
     env = BISTTradingEnv(df.copy(), bist100_returns=bist_ret5,
                           initial_capital=initial_capital)
@@ -90,6 +109,17 @@ def run_rl_backtest(
         action, _ = model.predict(obs, deterministic=True)
         price     = env.close[env.current_step]
         cur_date  = dates[step_idx] if step_idx < len(dates) else None
+
+        # ── Filtre kapısı — sadece AL sinyalini etkiler ───────────────
+        if action == 1:
+            # MA200: fiyat ortalamanın altındaysa alma
+            if sma200_arr is not None:
+                ma200_val = sma200_arr[env.current_step]
+                if not np.isnan(ma200_val) and price < ma200_val:
+                    action = 0  # BEKLE'ye düşür
+            # F-Score: temel analiz yetersizse alma
+            if not fscore_ok:
+                action = 0  # BEKLE'ye düşür
 
         # Kendi portföy takibimizi paralel yürüt (RL env kendi hesaplar)
         if action == 1 and shares == 0:           # AL
@@ -173,4 +203,9 @@ def run_rl_backtest(
         "sharpe":          round(float(sharpe), 2),
         "trades":          trades,
         "portfolio_curve": portfolio_series,
+        "filters_applied": {
+            "ma200":  use_ma200_filter,
+            "fscore": min_fscore,
+            "fscore_ok": fscore_ok,
+        },
     }
