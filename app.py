@@ -7,8 +7,9 @@ from config import BIST50_SYMBOLS, SECTOR_INDEX_MAP, SECTOR_MAP
 from data_fetcher import fetch_stock_data, fetch_macro_data, fetch_all_bist30
 from indicators import add_technical_indicators
 import strategy
-import backtester 
+import backtester
 import importlib
+
 importlib.reload(strategy)
 importlib.reload(backtester)
 from backtester import run_backtest
@@ -18,8 +19,10 @@ import plotly.express as px
 import cluster_manager
 import sim_manager
 import news_scraper
+from news.news_manager import get_manager as _get_news_manager
 
 load_dotenv()
+
 
 # ============================================================
 # TEMEL ANALİZ EKRANI (Strateji dışı — sadece UI etiketi)
@@ -33,11 +36,12 @@ def get_fundamental_label(symbol):
     """
     try:
         import yfinance as yf
+
         info = yf.Ticker(symbol).info
         eps = info.get("trailingEps") or info.get("epsTrailingTwelveMonths")
-        pe  = info.get("trailingPE")  or info.get("forwardPE")
-        pb  = info.get("priceToBook")
-        de  = info.get("debtToEquity")  # Borç/Özkaynak (yüzde olarak gelir)
+        pe = info.get("trailingPE") or info.get("forwardPE")
+        pb = info.get("priceToBook")
+        de = info.get("debtToEquity")  # Borç/Özkaynak (yüzde olarak gelir)
 
         flags, score = [], 0
 
@@ -65,7 +69,7 @@ def get_fundamental_label(symbol):
         # Borç/Özkaynak (yfinance yüzde olarak verir, 300 = 3x)
         if de is not None:
             if de > 300:
-                flags.append(f"Yüksek borç ({de/100:.1f}x)")
+                flags.append(f"Yüksek borç ({de / 100:.1f}x)")
                 score -= 1
 
         if score <= -2:
@@ -79,8 +83,8 @@ def get_fundamental_label(symbol):
             "label": label,
             "flags": flags,
             "eps": round(eps, 2) if eps else None,
-            "pe":  round(pe, 1)  if pe  else None,
-            "pb":  round(pb, 1)  if pb  else None,
+            "pe": round(pe, 1) if pe else None,
+            "pb": round(pb, 1) if pb else None,
         }
     except Exception:
         return {"label": "?", "flags": [], "eps": None, "pe": None, "pb": None}
@@ -100,13 +104,14 @@ st.set_page_config(
     page_title="BIST50 Tradebot v1",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
 # ============================================================
 # CSS
 # ============================================================
-st.markdown("""
+st.markdown(
+    """
 <style>
     .stApp {
         background: linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 50%, #16213e 100%);
@@ -145,51 +150,62 @@ st.markdown("""
         border-radius: 12px; padding: 15px; margin-top: 15px;
     }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 # ============================================================
 # BASLIK
 # ============================================================
 st.markdown('<p class="main-title">📈 BIST30 Tradebot v1</p>', unsafe_allow_html=True)
-st.markdown('<p class="sub-title">Teknik Analiz & Hacim & Divergence & Haber</p>', unsafe_allow_html=True)
+st.markdown(
+    '<p class="sub-title">Teknik Analiz & Hacim & Divergence & Haber</p>',
+    unsafe_allow_html=True,
+)
 
 # ============================================================
 # SOL PANEL
 # ============================================================
 with st.sidebar:
     st.header("⚙️ Ayarlar")
-    
-    scan_mode_sidebar = st.radio(
-        "Ek Modlar",
-        ["Normal Analiz", "Backtesting"],
-        index=0
-    )
-    
+
+    scan_mode_sidebar = st.radio("Ek Modlar", ["Normal Analiz", "Backtesting"], index=0)
+
     st.divider()
-    
+
     if scan_mode_sidebar == "Backtesting":
-        bt_profile = st.selectbox("Yatirim Profili", ["Trend Avcisi", "Deger Yatirimcisi"], index=0)
+        bt_profile = st.selectbox(
+            "Yatirim Profili", ["Trend Avcisi", "Deger Yatirimcisi"], index=0
+        )
         bt_p = PROFILES[bt_profile]
         bt_symbol = st.selectbox("Backtest Sembol", BIST50_SYMBOLS, index=0)
         bt_period = st.selectbox("Backtest Suresi", ["3mo", "6mo", "1y", "2y"], index=2)
         bt_capital = st.number_input("Baslangic Sermayesi", value=100000, step=10000)
         bt_stop_loss = st.slider(
-            "Stop-Loss (%)", min_value=-30, max_value=-3, 
-            value=bt_p["stop_loss"], step=1,
-            help="Zarar bu yuzdeye ulasinca pozisyon kapatilir"
+            "Stop-Loss (%)",
+            min_value=-30,
+            max_value=-3,
+            value=bt_p["stop_loss"],
+            step=1,
+            help="Zarar bu yuzdeye ulasinca pozisyon kapatilir",
         )
         bt_take_profit = st.slider(
-            "Kar Hedefi (%)", min_value=3, max_value=50, 
-            value=bt_p["take_profit"], step=1,
-            help="Kar bu yuzdeye ulasinca pozisyon kapatilir"
+            "Kar Hedefi (%)",
+            min_value=3,
+            max_value=50,
+            value=bt_p["take_profit"],
+            step=1,
+            help="Kar bu yuzdeye ulasinca pozisyon kapatilir",
         )
-        
+
         # Faz 30: Elite Quant Ayarları
         st.divider()
         st.caption("🛡️ Elite Quant Gelişmiş Ayarlar")
         bt_strategy_sync = st.toggle("Strateji Senkronizasyonu (38 Kural)", value=True)
         bt_use_trailing = st.toggle("İz Süren Stop (Trailing Stop)", value=True)
-        bt_trailing_pct = st.slider("Trailing Tabanı (%)", 2, 15, 5, help="Zirveden ne kadar dusunce satilsin?")
+        bt_trailing_pct = st.slider(
+            "Trailing Tabanı (%)", 2, 15, 5, help="Zirveden ne kadar dusunce satilsin?"
+        )
 
         # Çıkış Stratejisi
         bt_exit_strategy = st.selectbox(
@@ -197,53 +213,75 @@ with st.sidebar:
             options=["full", "partial_2r"],
             format_func=lambda x: {
                 "full": "Tam Çıkış — Tüm pozisyon trailing stop ile çıkar",
-                "partial_2r": "Kısmi Çıkış — %50 → 2R'de sat, %50 → trailing devam"
+                "partial_2r": "Kısmi Çıkış — %50 → 2R'de sat, %50 → trailing devam",
             }[x],
-            help="partial_2r: İlk yarı 2× risk mesafesinde satılır, stop breakeven'a taşınır."
+            help="partial_2r: İlk yarı 2× risk mesafesinde satılır, stop breakeven'a taşınır.",
         )
 
         # Elite Ultra (Faz 31)
         c1, c2 = st.columns(2)
-        bt_use_atr = c1.toggle("Dinamik ATR Takibi", value=True, help="Stop mesafesini oynakliga (ATR) gore ayarlar")
-        bt_use_vol_peak = c2.toggle("Hacimli Zirve (Blow-off) Koruma", value=True, help="Zirvede asiri hacim gorulurse kapiyi daraltir")
-        st.markdown(f"""
+        bt_use_atr = c1.toggle(
+            "Dinamik ATR Takibi",
+            value=True,
+            help="Stop mesafesini oynakliga (ATR) gore ayarlar",
+        )
+        bt_use_vol_peak = c2.toggle(
+            "Hacimli Zirve (Blow-off) Koruma",
+            value=True,
+            help="Zirvede asiri hacim gorulurse kapiyi daraltir",
+        )
+        st.markdown(
+            f"""
         <div class="profile-box">
             📋 Stop-Loss: {bt_stop_loss}%<br>
             🎯 Kar Hedefi: {bt_take_profit}%
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
     else:
         profile_names = list(PROFILES.keys())
         profile_name = st.selectbox(
             "Yatirim Profili",
             profile_names,
             index=0,
-            help="Yatirim tarzina gore ayarlar otomatik belirlenir"
+            help="Yatirim tarzina gore ayarlar otomatik belirlenir",
         )
-        
+
         selected_profile = PROFILES[profile_name]
-        
+
         if profile_name == "Manuel":
-            period = st.selectbox("Veri Suresi", ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y"], index=4)
-            interval = st.selectbox("Mum Periyodu", ["5m", "15m", "30m", "1h", "1d", "1wk"], index=4)
+            period = st.selectbox(
+                "Veri Suresi", ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y"], index=4
+            )
+            interval = st.selectbox(
+                "Mum Periyodu", ["5m", "15m", "30m", "1h", "1d", "1wk"], index=4
+            )
         else:
             period = selected_profile["period"]
             interval = selected_profile["interval"]
-        
-        st.markdown(f"""
+
+        st.markdown(
+            f"""
         <div class="profile-box">
-            {selected_profile['description']}<br>
+            {selected_profile["description"]}<br>
             📊 {period} veri, {interval} mum<br>
-            🎯 Kar: %{selected_profile['take_profit']} | Stop: %{selected_profile['stop_loss']}
+            🎯 Kar: %{selected_profile["take_profit"]} | Stop: %{selected_profile["stop_loss"]}
         </div>
-        """, unsafe_allow_html=True)
-        
+        """,
+            unsafe_allow_html=True,
+        )
+
         st.divider()
         st.caption("🐢 Turtle Risk Yonetimi (Lot Hesabi)")
         invest_capital = st.number_input("Sermaye (TL)", value=100000, step=10000)
-        risk_pct = st.slider("Maks. Risk (%)", min_value=1.0, max_value=5.0, value=2.0, step=0.5)
-        turtle_active = st.checkbox("Kaplumbaga (Donchian) Stratejisini Etkinlestir", value=False)
-        
+        risk_pct = st.slider(
+            "Maks. Risk (%)", min_value=1.0, max_value=5.0, value=2.0, step=0.5
+        )
+        turtle_active = st.checkbox(
+            "Kaplumbaga (Donchian) Stratejisini Etkinlestir", value=False
+        )
+
         st.divider()
     st.divider()
     telegram_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -252,8 +290,9 @@ with st.sidebar:
     send_notification = False
     if scan_mode_sidebar != "Backtesting" and telegram_ready:
         send_notification = st.checkbox("Telegram'a gonder", value=False)
-    
+
     start_scan = st.button("🚀 Baslat", use_container_width=True, type="primary")
+
 
 # ============================================================
 # YARDIMCI GORSELLESTIRME
@@ -269,45 +308,105 @@ def get_signal_style(signal):
     }
     return styles.get(signal, ("signal-bekle", "⚪"))
 
+
 def render_news_panel(symbol):
     st.subheader("📰 Akıllı Haber & KAP Merkezi")
-    score, news = news_scraper.get_sentiment_score(symbol)
+
+    # Yeni gelişmiş haber sistemi (Faz 33)
+    try:
+        nm = _get_news_manager()
+        score, news = nm.get_sentiment_score(symbol)
+    except Exception:
+        score, news = news_scraper.get_sentiment_score(symbol)
+
     if not news:
         st.info("Güncel haber veya KAP bildirimi bulunamadı.")
         return
-    
+
     # Haber tipi dağılımı
     has_kap = any(n.get("type") == "KAP" for n in news)
     has_sector = any(n.get("type") == "Sektör" for n in news)
-    
+    has_macro = any(n.get("type") == "Makro" for n in news)
+
+    # Genel sentiment göstergesi
+    sentiment_emoji = "🟢" if score > 10 else "🔴" if score < -10 else "⚪"
+    score_color = "#2ecc71" if score > 10 else "#e74c3c" if score < -10 else "#95a5a6"
+    model_info = news[0].get("model", "ensemble") if news else "N/A"
+    st.markdown(
+        f"""
+    <div style="background-color: #0e1117; padding: 10px; border-radius: 8px; margin-bottom: 15px; border: 1px solid rgba(255,255,255,0.1);">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 16px; font-weight: bold; color: #ecf0f1;">
+                {sentiment_emoji} Genel Haber Sentimenti: <span style="color: {score_color};">{score:+.1f}</span>
+            </span>
+            <span style="font-size: 12px; color: #7f8c8d;">
+                {len(news)} haber analiz edildi | Model: {model_info}
+            </span>
+        </div>
+    </div>
+    """,
+        unsafe_allow_html=True,
+    )
+
     if has_kap:
         st.success("🔔 Önemli: Bu hisse için yeni **KAP Bildirimleri** mevcut!")
+    if has_macro:
+        st.warning("🌍 Makroekonomik haberler sektörü etkiliyor.")
     elif has_sector:
-        st.info(f"💡 Not: Hisseye özel yeni haber yok, **Sektörel Gelişmeler** listeleniyor.")
-        
+        st.info(
+            f"💡 Not: Hisseye özel yeni haber yok, **Sektörel Gelişmeler** listeleniyor."
+        )
+
     for n in news:
-        sentiment_color = "#2ecc71" if n['sentiment'] == "Positive" else "#e74c3c" if n['sentiment'] == "Negative" else "#95a5a6"
-        
-        # Etiket Ayarları
+        sentiment_color = (
+            "#2ecc71"
+            if n["sentiment"] == "Positive"
+            else "#e74c3c"
+            if n["sentiment"] == "Negative"
+            else "#95a5a6"
+        )
+
+        # Etiket Ayarları (Makro tipi eklendi)
         type_label = n.get("type", "Haber")
-        label_bg = "#c0392b" if type_label == "KAP" else "#2980b9" if type_label == "Sektör" else "#2c3e50"
-        
-        st.markdown(f"""
+        label_bg = (
+            "#c0392b"
+            if type_label == "KAP"
+            else "#8e44ad"
+            if type_label == "Makro"
+            else "#2980b9"
+            if type_label == "Sektör"
+            else "#2c3e50"
+        )
+
+        # Kaynak ve güven bilgisi
+        source_text = n.get("source", "")
+        confidence = n.get("confidence", 0)
+        conf_text = (
+            f" | Güven: %{confidence * 100:.0f}"
+            if confidence and confidence > 0
+            else ""
+        )
+
+        st.markdown(
+            f"""
         <div style="background-color: #1e272e; padding: 12px; border-radius: 8px; border-left: 5px solid {sentiment_color}; margin-bottom: 10px; border-top: 1px solid rgba(255,255,255,0.05);">
             <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 5px;">
                 <span style="background-color: {label_bg}; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: bold; text-transform: uppercase;">{type_label}</span>
-                <span style="font-size: 11px; color: #7f8c8d;">{n['source']}</span>
+                <span style="font-size: 11px; color: #7f8c8d;">{source_text}{conf_text}</span>
             </div>
-            <div style="font-size: 14px; font-weight: bold; color: #ecf0f1; margin: 5px 0; line-height: 1.4;">{n['title']}</div>
+            <div style="font-size: 14px; font-weight: bold; color: #ecf0f1; margin: 5px 0; line-height: 1.4;">{n["title"]}</div>
             <div style="font-size: 12px; color: #bdc3c7; margin-top: 8px; display: flex; justify-content: space-between; align-items: center;">
-                <span>🔗 <a href="{n['link']}" target="_blank" style="color: #3498db; text-decoration: none;">Detaylı Oku</a></span>
+                <span>🔗 <a href="{n["link"]}" target="_blank" style="color: #3498db; text-decoration: none;">Detaylı Oku</a></span>
                 <div style="display: flex; align-items: center; gap: 5px;">
-                    <span style="color: {sentiment_color}; font-weight: bold;">{n['sentiment']}</span>
-                    <span style="background-color: rgba(255,255,255,0.1); padding: 1px 6px; border-radius: 10px; font-size: 11px; color: #ecf0f1;">{n['score']}</span>
+                    <span style="color: {sentiment_color}; font-weight: bold;">{n["sentiment"]}</span>
+                    <span style="background-color: rgba(255,255,255,0.1); padding: 1px 6px; border-radius: 10px; font-size: 11px; color: #ecf0f1;">{n["score"]}</span>
                 </div>
             </div>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
+
 
 def _ind_badge(signal):
     """AL / SAT / NÖTR için renkli HTML badge döndürür."""
@@ -321,6 +420,7 @@ def _ind_badge(signal):
         return "🔴🔴 GÜÇLÜ SAT"
     return "⚪ NÖTR"
 
+
 def render_indicator_panel(result):
     """Tüm teknik indikatörleri AL/SAT/NÖTR sinyal tablosu olarak gösterir."""
     with st.expander("📈 Teknik İndikatör Sinyalleri", expanded=True):
@@ -329,54 +429,87 @@ def render_indicator_panel(result):
         # RSI
         rsi = result.get("rsi")
         if rsi is not None:
-            if rsi < 30:   sig = "GÜÇLÜ AL"
-            elif rsi < 40: sig = "AL"
-            elif rsi > 70: sig = "GÜÇLÜ SAT"
-            elif rsi > 60: sig = "SAT"
-            else:          sig = "NÖTR"
+            if rsi < 30:
+                sig = "GÜÇLÜ AL"
+            elif rsi < 40:
+                sig = "AL"
+            elif rsi > 70:
+                sig = "GÜÇLÜ SAT"
+            elif rsi > 60:
+                sig = "SAT"
+            else:
+                sig = "NÖTR"
             indicators.append(("RSI (14)", f"{rsi:.1f}", sig))
 
         # MACD
-        macd = result.get("macd"); macd_sig = result.get("macd_signal")
+        macd = result.get("macd")
+        macd_sig = result.get("macd_signal")
         if macd is not None and macd_sig is not None:
-            if macd > macd_sig and macd < 0:   sig = "GÜÇLÜ AL"
-            elif macd > macd_sig:              sig = "AL"
-            elif macd < macd_sig and macd > 0: sig = "GÜÇLÜ SAT"
-            elif macd < macd_sig:              sig = "SAT"
-            else:                              sig = "NÖTR"
+            if macd > macd_sig and macd < 0:
+                sig = "GÜÇLÜ AL"
+            elif macd > macd_sig:
+                sig = "AL"
+            elif macd < macd_sig and macd > 0:
+                sig = "GÜÇLÜ SAT"
+            elif macd < macd_sig:
+                sig = "SAT"
+            else:
+                sig = "NÖTR"
             indicators.append(("MACD", f"{macd:.4f}", sig))
 
         # EMA Crossover
         ema_cross = result.get("ema_cross")
         if ema_cross:
-            sig_map = {"Golden Cross": "GÜÇLÜ AL", "Yukari": "AL", "Death Cross": "GÜÇLÜ SAT", "Asagi": "SAT"}
+            sig_map = {
+                "Golden Cross": "GÜÇLÜ AL",
+                "Yukari": "AL",
+                "Death Cross": "GÜÇLÜ SAT",
+                "Asagi": "SAT",
+            }
             sig = sig_map.get(ema_cross, "NÖTR")
             indicators.append(("EMA 9/21", ema_cross, sig))
 
         # SMA
-        price = result.get("price"); sma9 = result.get("sma_9"); sma21 = result.get("sma_21")
+        price = result.get("price")
+        sma9 = result.get("sma_9")
+        sma21 = result.get("sma_21")
         if price and sma9 and sma21:
-            if price > sma9 > sma21:  sig = "AL"
-            elif price < sma9 < sma21: sig = "SAT"
-            else:                      sig = "NÖTR"
+            if price > sma9 > sma21:
+                sig = "AL"
+            elif price < sma9 < sma21:
+                sig = "SAT"
+            else:
+                sig = "NÖTR"
             indicators.append(("SMA 9/21", f"{sma9:.2f} / {sma21:.2f}", sig))
 
         # Bollinger
-        bb_lower = result.get("bb_lower"); bb_upper = result.get("bb_upper")
+        bb_lower = result.get("bb_lower")
+        bb_upper = result.get("bb_upper")
         if price and bb_lower and bb_upper:
-            if price <= bb_lower:              sig = "GÜÇLÜ AL"
-            elif price <= bb_lower * 1.02:     sig = "AL"
-            elif price >= bb_upper:            sig = "GÜÇLÜ SAT"
-            elif price >= bb_upper * 0.98:     sig = "SAT"
-            else:                              sig = "NÖTR"
-            indicators.append(("Bollinger Bantları", f"Alt:{bb_lower:.2f} Üst:{bb_upper:.2f}", sig))
+            if price <= bb_lower:
+                sig = "GÜÇLÜ AL"
+            elif price <= bb_lower * 1.02:
+                sig = "AL"
+            elif price >= bb_upper:
+                sig = "GÜÇLÜ SAT"
+            elif price >= bb_upper * 0.98:
+                sig = "SAT"
+            else:
+                sig = "NÖTR"
+            indicators.append(
+                ("Bollinger Bantları", f"Alt:{bb_lower:.2f} Üst:{bb_upper:.2f}", sig)
+            )
 
         # ADX
-        adx = result.get("adx"); trend_dir = result.get("trend_direction", "")
+        adx = result.get("adx")
+        trend_dir = result.get("trend_direction", "")
         if adx is not None:
-            if adx >= 25 and trend_dir == "Yukari":   sig = "AL" if adx < 30 else "GÜÇLÜ AL"
-            elif adx >= 25 and trend_dir == "Asagi":  sig = "SAT" if adx < 30 else "GÜÇLÜ SAT"
-            else:                                     sig = "NÖTR"
+            if adx >= 25 and trend_dir == "Yukari":
+                sig = "AL" if adx < 30 else "GÜÇLÜ AL"
+            elif adx >= 25 and trend_dir == "Asagi":
+                sig = "SAT" if adx < 30 else "GÜÇLÜ SAT"
+            else:
+                sig = "NÖTR"
             indicators.append(("ADX (14)", f"{adx:.1f} {trend_dir}", sig))
 
         # SuperTrend
@@ -388,41 +521,60 @@ def render_indicator_panel(result):
         # Hacim
         vol_ratio = result.get("volume_ratio")
         if vol_ratio is not None:
-            if vol_ratio >= 2.0:   sig = "GÜÇLÜ AL"
-            elif vol_ratio >= 1.5: sig = "AL"
-            elif vol_ratio < 0.5:  sig = "SAT"
-            else:                  sig = "NÖTR"
+            if vol_ratio >= 2.0:
+                sig = "GÜÇLÜ AL"
+            elif vol_ratio >= 1.5:
+                sig = "AL"
+            elif vol_ratio < 0.5:
+                sig = "SAT"
+            else:
+                sig = "NÖTR"
             indicators.append(("Hacim Oranı", f"{vol_ratio:.2f}x", sig))
 
         # Divergence
-        bull_div = result.get("bull_div", 0); bear_div = result.get("bear_div", 0)
+        bull_div = result.get("bull_div", 0)
+        bear_div = result.get("bear_div", 0)
         if bull_div > 0 or bear_div > 0:
-            if bull_div >= 3:   sig = "GÜÇLÜ AL"
-            elif bull_div >= 1: sig = "AL"
-            elif bear_div >= 3: sig = "GÜÇLÜ SAT"
-            elif bear_div >= 1: sig = "SAT"
-            else:               sig = "NÖTR"
+            if bull_div >= 3:
+                sig = "GÜÇLÜ AL"
+            elif bull_div >= 1:
+                sig = "AL"
+            elif bear_div >= 3:
+                sig = "GÜÇLÜ SAT"
+            elif bear_div >= 1:
+                sig = "SAT"
+            else:
+                sig = "NÖTR"
             indicators.append(("Divergence", f"↑{bull_div} ↓{bear_div}", sig))
 
         # Multi-TF
         weekly = result.get("weekly_trend")
         if weekly:
-            sig = "AL" if weekly == "Yukari" else ("SAT" if weekly == "Asagi" else "NÖTR")
+            sig = (
+                "AL" if weekly == "Yukari" else ("SAT" if weekly == "Asagi" else "NÖTR")
+            )
             indicators.append(("Haftalık Trend", weekly, sig))
 
         # Destek/Direnç
-        sup_pct = result.get("support_distance_pct"); res_pct = result.get("resistance_distance_pct")
+        sup_pct = result.get("support_distance_pct")
+        res_pct = result.get("resistance_distance_pct")
         if sup_pct is not None:
-            if sup_pct <= 1.5:   sig = "AL"
-            elif res_pct and res_pct <= 1.5: sig = "SAT"
-            else:                sig = "NÖTR"
-            sup_val = result.get("nearest_support", "-"); res_val = result.get("nearest_resistance", "-")
+            if sup_pct <= 1.5:
+                sig = "AL"
+            elif res_pct and res_pct <= 1.5:
+                sig = "SAT"
+            else:
+                sig = "NÖTR"
+            sup_val = result.get("nearest_support", "-")
+            res_val = result.get("nearest_resistance", "-")
             indicators.append(("Destek/Direnç", f"D:{sup_val} R:{res_val}", sig))
 
         # Fibonacci
         fib_zone = result.get("fib_zone")
         if fib_zone:
-            fib_bullish = any(z in str(fib_zone) for z in ["0.382", "0.5", "0.618", "Destek"])
+            fib_bullish = any(
+                z in str(fib_zone) for z in ["0.382", "0.5", "0.618", "Destek"]
+            )
             sig = "AL" if fib_bullish else "NÖTR"
             indicators.append(("Fibonacci", fib_zone, sig))
 
@@ -435,11 +587,16 @@ def render_indicator_panel(result):
         # RS Rating vs BIST100
         rs = result.get("rs_rating")
         if rs is not None:
-            if rs >= 10:    sig = "GÜÇLÜ AL"
-            elif rs >= 3:   sig = "AL"
-            elif rs <= -10: sig = "GÜÇLÜ SAT"
-            elif rs <= -3:  sig = "SAT"
-            else:           sig = "NÖTR"
+            if rs >= 10:
+                sig = "GÜÇLÜ AL"
+            elif rs >= 3:
+                sig = "AL"
+            elif rs <= -10:
+                sig = "GÜÇLÜ SAT"
+            elif rs <= -3:
+                sig = "SAT"
+            else:
+                sig = "NÖTR"
             indicators.append(("RS vs BIST100", f"{rs:+.1f}%", sig))
 
         # Sektör
@@ -461,20 +618,21 @@ def render_indicator_panel(result):
                 st.markdown(f"{badge} &nbsp; `{value}`", unsafe_allow_html=False)
                 st.markdown("---")
 
+
 def render_single_result(result, df, capital=100000, risk_pct=2.0):
     css_class, emoji = get_signal_style(result["signal"])
 
     # Temel Analiz Etiketi
     fund = get_fundamental_label(result["symbol"])
     badge = _fundamental_badge(fund["label"])
-    pe_str  = f"F/K: **{fund['pe']}x**"  if fund["pe"]  else "F/K: -"
-    pb_str  = f"PD/DD: **{fund['pb']}x**" if fund["pb"]  else "PD/DD: -"
-    eps_str = f"EPS: **{fund['eps']}**"   if fund["eps"] is not None else "EPS: -"
+    pe_str = f"F/K: **{fund['pe']}x**" if fund["pe"] else "F/K: -"
+    pb_str = f"PD/DD: **{fund['pb']}x**" if fund["pb"] else "PD/DD: -"
+    eps_str = f"EPS: **{fund['eps']}**" if fund["eps"] is not None else "EPS: -"
     flags_str = "  ·  ".join(fund["flags"]) if fund["flags"] else "Temel görünüm temiz"
     st.markdown(
         f"**Temel Analiz** {badge} &nbsp;&nbsp; {pe_str} &nbsp;|&nbsp; {pb_str} &nbsp;|&nbsp; {eps_str}"
         + (f"\n\n> {flags_str}" if fund["flags"] else ""),
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
     st.markdown("---")
 
@@ -494,14 +652,18 @@ def render_single_result(result, df, capital=100000, risk_pct=2.0):
     res_col, news_col = st.columns([1, 1])
     with res_col:
         reasons_html = "".join([f"<li>{r}</li>" for r in result["reasons"]])
-        st.markdown(f"""
+        st.markdown(
+            f"""
         <div class="signal-card {css_class}">
-            <h2>{emoji} {result['signal']}</h2>
+            <h2>{emoji} {result["signal"]}</h2>
             <ul>{reasons_html}</ul>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
     with news_col:
         render_news_panel(result["symbol"])
+
 
 def render_backtest_results(report):
     if not report:
@@ -509,26 +671,36 @@ def render_backtest_results(report):
         return
 
     st.markdown(f"### 🧪 Backtest Sonuçları: {report['symbol']}")
-    
+
     # Hata Kontrolü (df yoksa)
     if "df" not in report:
-        st.error(f"⚠️ Kritik Hata: Backtest veri seti (df) rapor içinde bulunamadı! Mevcut veriler: {list(report.keys())}")
-        st.info("İpucu: Docker kullanıyorsanız konteyneri yeniden başlatmayı veya 'backtester.py' dosyasının güncel olduğundan emin olmayı deneyin.")
+        st.error(
+            f"⚠️ Kritik Hata: Backtest veri seti (df) rapor içinde bulunamadı! Mevcut veriler: {list(report.keys())}"
+        )
+        st.info(
+            "İpucu: Docker kullanıyorsanız konteyneri yeniden başlatmayı veya 'backtester.py' dosyasının güncel olduğundan emin olmayı deneyin."
+        )
         return
 
     # Metrikler
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Son Sermaye", f"{report['final_capital']:,} ₺")
-    m2.metric("Toplam Kar", f"{report['total_profit']:,} ₺", delta=f"%{report['total_return_pct']}")
-    m3.metric("İşlem Sayısı", report['total_trades'])
+    m2.metric(
+        "Toplam Kar",
+        f"{report['total_profit']:,} ₺",
+        delta=f"%{report['total_return_pct']}",
+    )
+    m3.metric("İşlem Sayısı", report["total_trades"])
     m4.metric("Başarı Oranı", f"%{report['win_rate']}")
 
     df = report["df"]
-    
+
     # 1. Grafik: Fiyat ve İşlemler
     st.subheader("📈 Fiyat ve Al/Sat Sinyalleri")
-    fig_price = px.line(df, y="Close", title=f"{report['symbol']} Fiyat Grafiği", template="plotly_dark")
-    
+    fig_price = px.line(
+        df, y="Close", title=f"{report['symbol']} Fiyat Grafiği", template="plotly_dark"
+    )
+
     # Alış ve Satış noktalarını işaretle
     buys = [t for t in report["trades"]]
     buy_dates = [t["buy_date"] for t in buys]
@@ -536,16 +708,32 @@ def render_backtest_results(report):
     sell_dates = [t["sell_date"] for t in buys if "(Açık)" not in t["sell_date"]]
     sell_prices = [t["sell_price"] for t in buys if "(Açık)" not in t["sell_date"]]
 
-    fig_price.add_scatter(x=buy_dates, y=buy_prices, mode='markers', name='ALIŞ', 
-                         marker=dict(color='lime', size=12, symbol='triangle-up'))
-    fig_price.add_scatter(x=sell_dates, y=sell_prices, mode='markers', name='SATIŞ', 
-                         marker=dict(color='red', size=12, symbol='triangle-down'))
-    
+    fig_price.add_scatter(
+        x=buy_dates,
+        y=buy_prices,
+        mode="markers",
+        name="ALIŞ",
+        marker=dict(color="lime", size=12, symbol="triangle-up"),
+    )
+    fig_price.add_scatter(
+        x=sell_dates,
+        y=sell_prices,
+        mode="markers",
+        name="SATIŞ",
+        marker=dict(color="red", size=12, symbol="triangle-down"),
+    )
+
     st.plotly_chart(fig_price, use_container_width=True)
 
     # 2. Grafik: Sermaye Eğrisi (Equity Curve)
     st.subheader("💰 Sermaye Gelişimi (Equity Curve)")
-    fig_equity = px.area(df, y="Equity", title="Toplam Portföy Değeri", template="plotly_dark", color_discrete_sequence=["#2ecc71"])
+    fig_equity = px.area(
+        df,
+        y="Equity",
+        title="Toplam Portföy Değeri",
+        template="plotly_dark",
+        color_discrete_sequence=["#2ecc71"],
+    )
     st.plotly_chart(fig_equity, use_container_width=True)
 
     # 3. İşlem Listesi
@@ -556,58 +744,105 @@ def render_backtest_results(report):
     else:
         st.info("Hiç işlem gerçekleşmedi.")
 
+
 def render_scan_results(results):
     for r in results[:15]:
         css_class, emoji = get_signal_style(r["signal"])
         fund = get_fundamental_label(r["symbol"])
         badge = _fundamental_badge(fund["label"])
         tip = " | ".join(fund["flags"]) if fund["flags"] else "Temel görünüm temiz"
-        pe_str  = f"F/K {fund['pe']}x"  if fund["pe"]  else ""
-        pb_str  = f"PD/DD {fund['pb']}x" if fund["pb"]  else ""
-        eps_str = f"EPS {fund['eps']}"   if fund["eps"] is not None else ""
+        pe_str = f"F/K {fund['pe']}x" if fund["pe"] else ""
+        pb_str = f"PD/DD {fund['pb']}x" if fund["pb"] else ""
+        eps_str = f"EPS {fund['eps']}" if fund["eps"] is not None else ""
         metrics = " · ".join(x for x in [pe_str, pb_str, eps_str] if x)
-        st.markdown(f"""
+        st.markdown(
+            f"""
         <div class="signal-card {css_class}" style="padding:10px 15px;">
-            <b>{r['symbol'].replace('.IS','')}</b>: {emoji} {r['signal']} | Skor: {r['score']} | Fiyat: {r['price']} ₺
+            <b>{r["symbol"].replace(".IS", "")}</b>: {emoji} {r["signal"]} | Skor: {r["score"]} | Fiyat: {r["price"]} ₺
             {badge}
             <span style="color:#aaa;font-size:0.8em;margin-left:8px;">{metrics}</span>
             <span style="color:#888;font-size:0.75em;display:block;margin-top:2px;">{tip}</span>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+            unsafe_allow_html=True,
+        )
+
 
 # ============================================================
 # ANA TABS
 # ============================================================
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(["📊 Tekli Hisse Analizi", "🚀 BIST50 Tam Tarama", "🗺️ Piyasa Haritası", "🎲 Risk & Simülasyon Merkezi", "🤖 RL Ajanı", "🔄 Rotasyon Stratejisi", "📋 Temel Analiz", "🧬 Kombine Strateji"])
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
+    [
+        "📊 Tekli Hisse Analizi",
+        "🚀 BIST50 Tam Tarama",
+        "🗺️ Piyasa Haritası",
+        "🎲 Risk & Simülasyon Merkezi",
+        "🤖 RL Ajanı",
+        "🔄 Rotasyon Stratejisi",
+        "📋 Temel Analiz",
+        "🧬 Kombine Strateji",
+    ]
+)
 
 with tab1:
     display_names = [s.replace(".IS", "") for s in BIST50_SYMBOLS]
-    selected_display = st.selectbox("Hisse Secin", display_names, index=display_names.index("THYAO"))
+    selected_display = st.selectbox(
+        "Hisse Secin", display_names, index=display_names.index("THYAO")
+    )
     selected_symbol = selected_display + ".IS"
-    
+
     if start_scan and scan_mode_sidebar == "Normal Analiz":
         with st.spinner(f"{selected_symbol} analiz ediliyor..."):
-            result = analyze_single_stock(selected_symbol, period=period, interval=interval, profile_name=profile_name, turtle_active=turtle_active)
-            render_single_result(result, result["df"], capital=invest_capital, risk_pct=risk_pct)
+            result = analyze_single_stock(
+                selected_symbol,
+                period=period,
+                interval=interval,
+                profile_name=profile_name,
+                turtle_active=turtle_active,
+            )
+            render_single_result(
+                result, result["df"], capital=invest_capital, risk_pct=risk_pct
+            )
 
 with tab2:
     if start_scan and scan_mode_sidebar == "Normal Analiz":
         with st.spinner("BIST50 taraniyor..."):
-            results = scan_all_bist50(period=period, interval=interval, profile_name=profile_name)
+            results = scan_all_bist50(
+                period=period, interval=interval, profile_name=profile_name
+            )
             render_scan_results(results)
-            
+
             # Portföy Dağılımı
             buy_signals = [r for r in results if r["signal"] in ["AL", "GUCLU AL"]]
             if buy_signals:
                 st.divider()
                 st.subheader("⚖️ Optimal Portföy Dağılımı")
                 symbols_to_opt = [r["symbol"] for r in buy_signals[:10]]
-                historical_dfs = {r["symbol"]: r["df"] for r in buy_signals if r["df"] is not None}
-                expected_rets = {r["symbol"]: (r["score"]/100) for r in buy_signals}
-                weights = portfolio_manager.optimize_portfolio(symbols_to_opt, expected_rets, historical_dfs)
-                
-                df_weights = pd.DataFrame([{"Hisse": s.replace(".IS",""), "Ağırlık (%)": w*100} for s, w in weights.items() if w > 0])
-                st.plotly_chart(px.pie(df_weights, values='Ağırlık (%)', names='Hisse', title="Sermaye Dağılımı", hole=0.4), use_container_width=True)
+                historical_dfs = {
+                    r["symbol"]: r["df"] for r in buy_signals if r["df"] is not None
+                }
+                expected_rets = {r["symbol"]: (r["score"] / 100) for r in buy_signals}
+                weights = portfolio_manager.optimize_portfolio(
+                    symbols_to_opt, expected_rets, historical_dfs
+                )
+
+                df_weights = pd.DataFrame(
+                    [
+                        {"Hisse": s.replace(".IS", ""), "Ağırlık (%)": w * 100}
+                        for s, w in weights.items()
+                        if w > 0
+                    ]
+                )
+                st.plotly_chart(
+                    px.pie(
+                        df_weights,
+                        values="Ağırlık (%)",
+                        names="Hisse",
+                        title="Sermaye Dağılımı",
+                        hole=0.4,
+                    ),
+                    use_container_width=True,
+                )
 
 with tab3:
     st.header("🗺️ BIST50 Piyasa Haritası (K-Means)")
@@ -617,10 +852,16 @@ with tab3:
             processed_data = {}
             for s, d in market_data.items():
                 processed_data[s] = add_technical_indicators(d)
-            
+
             clusters = cluster_manager.get_market_clusters(processed_data)
             if clusters is not None:
-                fig = px.scatter(clusters, x="Symbol", y="Cluster_Name", color="Cluster_Name", template="plotly_dark")
+                fig = px.scatter(
+                    clusters,
+                    x="Symbol",
+                    y="Cluster_Name",
+                    color="Cluster_Name",
+                    template="plotly_dark",
+                )
                 st.plotly_chart(fig, use_container_width=True)
                 st.dataframe(clusters, use_container_width=True)
 
@@ -630,46 +871,69 @@ with tab4:
     Bu bölümde hisseler için **10.000+ senaryo** üzerinden gelecek 21 günlük (1 ay) fiyat projeksiyonları yapılır. 
     **Geometrik Brownian Hareketi** modeli kullanılarak piyasa volatilitesi simüle edilir.
     """)
-    
+
     sim_display_names = [s.replace(".IS", "") for s in BIST50_SYMBOLS]
-    sim_selected = st.selectbox("Simülasyon İçin Hisse Seçin", sim_display_names, index=sim_display_names.index("THYAO"))
+    sim_selected = st.selectbox(
+        "Simülasyon İçin Hisse Seçin",
+        sim_display_names,
+        index=sim_display_names.index("THYAO"),
+    )
     sim_symbol = sim_selected + ".IS"
-    
+
     if st.button("Simülasyonu Çalıştır"):
         with st.spinner(f"{sim_symbol} için 1000 senaryo simüle ediliyor..."):
             # Veri çek
             df_sim = fetch_stock_data(sim_symbol, period="1y", interval="1d")
             if df_sim is not None:
-                sim_res = sim_manager.get_monte_carlo_results(sim_symbol, df_sim, days=21)
-                
+                sim_res = sim_manager.get_monte_carlo_results(
+                    sim_symbol, df_sim, days=21
+                )
+
                 if sim_res:
                     # Metrikler
                     m1, m2, m3, m4 = st.columns(4)
-                    m1.metric("Beklenen Fiyat (Median)", f"{sim_res['expected_price']} ₺")
+                    m1.metric(
+                        "Beklenen Fiyat (Median)", f"{sim_res['expected_price']} ₺"
+                    )
                     m2.metric("Başarı Olasılığı", f"%{sim_res['success_probability']}")
                     m3.metric("%5 En Kötü Senaryo", f"{sim_res['percentile_5']} ₺")
                     m4.metric("%95 En İyi Senaryo", f"{sim_res['percentile_95']} ₺")
-                    
+
                     # Grafik (Fan Chart)
                     st.subheader("📊 1000 Senaryo Fan Grafiği")
                     scenarios = sim_res["scenarios"]
                     # Sadece 100 senaryoyu çizelim karışıklık olmasın
                     plot_df = pd.DataFrame(scenarios[:100].T)
-                    fig_sim = px.line(plot_df, template="plotly_dark", labels={"value": "Fiyat", "index": "Gün"})
+                    fig_sim = px.line(
+                        plot_df,
+                        template="plotly_dark",
+                        labels={"value": "Fiyat", "index": "Gün"},
+                    )
                     fig_sim.update_layout(showlegend=False)
                     # Başlangıç fiyatına kırmızı çizgi
-                    fig_sim.add_hline(y=sim_res["start_price"], line_dash="dash", line_color="red", annotation_text="Başlangıç")
+                    fig_sim.add_hline(
+                        y=sim_res["start_price"],
+                        line_dash="dash",
+                        line_color="red",
+                        annotation_text="Başlangıç",
+                    )
                     st.plotly_chart(fig_sim, use_container_width=True)
-                    
+
                     # Dağılım Grafiği
                     st.subheader("🎯 Final Fiyat Dağılımı")
-                    fig_dist = px.histogram(sim_res["scenarios"][:, -1], nbins=50, template="plotly_dark", title="21 Gün Sonraki Fiyat Dağılımı")
+                    fig_dist = px.histogram(
+                        sim_res["scenarios"][:, -1],
+                        nbins=50,
+                        template="plotly_dark",
+                        title="21 Gün Sonraki Fiyat Dağılımı",
+                    )
                     fig_dist.add_vline(x=sim_res["start_price"], line_color="red")
                     st.plotly_chart(fig_dist, use_container_width=True)
 
 # Backtest sonucu — Tekli Hisse
 if start_scan and scan_mode_sidebar == "Backtesting":
     from backtester import run_backtest
+
     with st.spinner(f"{bt_symbol} backtest yapılıyor..."):
         report = run_backtest(
             bt_symbol,
@@ -683,7 +947,7 @@ if start_scan and scan_mode_sidebar == "Backtesting":
             trailing_pct=bt_trailing_pct,
             use_atr_trailing=bt_use_atr,
             use_volume_peak=bt_use_vol_peak,
-            exit_strategy=bt_exit_strategy
+            exit_strategy=bt_exit_strategy,
         )
         render_backtest_results(report)
 
@@ -691,15 +955,21 @@ if start_scan and scan_mode_sidebar == "Backtesting":
 if scan_mode_sidebar == "Backtesting":
     st.divider()
     st.subheader("📊 BIST50 Toplu Backtest")
-    st.caption("Tüm BIST50 hisselerine aynı strateji parametreleriyle backtest uygular. Sonuçlar stratejinin genel performansını gösterir.")
+    st.caption(
+        "Tüm BIST50 hisselerine aynı strateji parametreleriyle backtest uygular. Sonuçlar stratejinin genel performansını gösterir."
+    )
 
     if st.button("Tüm BIST50'yi Tara", type="primary", key="multi_bt"):
         from backtester import run_backtest
         from config import BIST50_SYMBOLS
+
         rows = []
         progress = st.progress(0, text="Taranıyor...")
         for idx, sym in enumerate(BIST50_SYMBOLS):
-            progress.progress((idx + 1) / len(BIST50_SYMBOLS), text=f"{sym} ({idx+1}/{len(BIST50_SYMBOLS)})")
+            progress.progress(
+                (idx + 1) / len(BIST50_SYMBOLS),
+                text=f"{sym} ({idx + 1}/{len(BIST50_SYMBOLS)})",
+            )
             try:
                 r = run_backtest(
                     sym,
@@ -713,25 +983,28 @@ if scan_mode_sidebar == "Backtesting":
                     trailing_pct=bt_trailing_pct,
                     use_atr_trailing=bt_use_atr,
                     use_volume_peak=bt_use_vol_peak,
-                    exit_strategy=bt_exit_strategy
+                    exit_strategy=bt_exit_strategy,
                 )
                 if r and r["total_trades"] > 0:
-                    rows.append({
-                        "Hisse":         sym.replace(".IS", ""),
-                        "Getiri %":      r["total_return_pct"],
-                        "İşlem":         r["total_trades"],
-                        "Kazanan":       r["winning_trades"],
-                        "Win Rate %":    r["win_rate"],
-                        "Sharpe":        r["sharpe"],
-                        "Max DD %":      r["max_drawdown_pct"],
-                        "Son Sermaye":   r["final_capital"],
-                    })
+                    rows.append(
+                        {
+                            "Hisse": sym.replace(".IS", ""),
+                            "Getiri %": r["total_return_pct"],
+                            "İşlem": r["total_trades"],
+                            "Kazanan": r["winning_trades"],
+                            "Win Rate %": r["win_rate"],
+                            "Sharpe": r["sharpe"],
+                            "Max DD %": r["max_drawdown_pct"],
+                            "Son Sermaye": r["final_capital"],
+                        }
+                    )
             except Exception as e:
                 pass
         progress.empty()
 
         if rows:
             import pandas as pd
+
             scan_df = pd.DataFrame(rows).sort_values("Getiri %", ascending=False)
             # Özet istatistikler
             c1, c2, c3, c4 = st.columns(4)
@@ -756,10 +1029,15 @@ if scan_mode_sidebar == "Backtesting":
 # ============================================================
 with tab5:
     st.header("🤖 RL Ajanı Backtest")
-    st.caption("Eğitilmiş PPO modelini seçili hisse üzerinde test eder ve kural tabanlı stratejiyle karşılaştırır.")
+    st.caption(
+        "Eğitilmiş PPO modelini seçili hisse üzerinde test eder ve kural tabanlı stratejiyle karşılaştırır."
+    )
 
     import os
-    rl_model_exists = os.path.exists("models/ppo_tradebot.zip") or os.path.exists("models/best_model.zip")
+
+    rl_model_exists = os.path.exists("models/ppo_tradebot.zip") or os.path.exists(
+        "models/best_model.zip"
+    )
 
     if not rl_model_exists:
         st.warning("⚠️ Eğitilmiş model bulunamadı.")
@@ -790,14 +1068,20 @@ with tab5:
         rl_col1, rl_col2 = st.columns([2, 1])
         with rl_col1:
             rl_display = [s.replace(".IS", "") for s in BIST50_SYMBOLS]
-            rl_sel = st.selectbox("Hisse", rl_display,
-                                  index=rl_display.index("AKBNK"),
-                                  key="rl_sym")
+            rl_sel = st.selectbox(
+                "Hisse", rl_display, index=rl_display.index("AKBNK"), key="rl_sym"
+            )
             rl_symbol = rl_sel + ".IS"
         with rl_col2:
-            rl_period = st.selectbox("Periyot", ["1y", "2y", "3y"], index=1, key="rl_period")
+            rl_period = st.selectbox(
+                "Periyot", ["1y", "2y", "3y"], index=1, key="rl_period"
+            )
 
-        rl_compare = st.checkbox("Kural tabanlı stratejiyle karşılaştır (yavaş ~1-2 dk)", value=False, key="rl_compare")
+        rl_compare = st.checkbox(
+            "Kural tabanlı stratejiyle karşılaştır (yavaş ~1-2 dk)",
+            value=False,
+            key="rl_compare",
+        )
 
         if st.button("▶️ RL Backtest Çalıştır", type="primary", key="rl_run"):
             from rl_backtester import run_rl_backtest
@@ -808,58 +1092,76 @@ with tab5:
             # Kural tabanlı backtest (opsiyonel)
             kb_res = None
             if rl_compare:
-                with st.spinner(f"Kural tabanlı strateji {rl_symbol} üzerinde test ediliyor..."):
+                with st.spinner(
+                    f"Kural tabanlı strateji {rl_symbol} üzerinde test ediliyor..."
+                ):
                     from backtester import run_backtest
+
                     kb_res = run_backtest(rl_symbol, period=rl_period)
 
             if rl_res.get("status") != "ok":
                 st.error(f"Backtest başarısız: {rl_res.get('status')}")
             else:
                 ret = rl_res["total_return_pct"]
-                bh  = rl_res["buy_and_hold_pct"]
+                bh = rl_res["buy_and_hold_pct"]
 
                 # ── 3'lü karşılaştırma metrikleri ──────────────────────────
                 if kb_res:
                     kb_ret = kb_res["total_return_pct"]
                     st.subheader("📊 Karşılaştırma")
                     c1, c2, c3 = st.columns(3)
-                    c1.metric("🤖 RL Ajanı",        f"%{ret:+.1f}",
-                               delta=f"{ret - bh:+.1f}% vs B&H")
-                    c2.metric("📐 Kural Tabanlı",    f"%{kb_ret:+.1f}",
-                               delta=f"{kb_ret - bh:+.1f}% vs B&H")
-                    c3.metric("📈 Buy & Hold",       f"%{bh:+.1f}")
+                    c1.metric(
+                        "🤖 RL Ajanı", f"%{ret:+.1f}", delta=f"{ret - bh:+.1f}% vs B&H"
+                    )
+                    c2.metric(
+                        "📐 Kural Tabanlı",
+                        f"%{kb_ret:+.1f}",
+                        delta=f"{kb_ret - bh:+.1f}% vs B&H",
+                    )
+                    c3.metric("📈 Buy & Hold", f"%{bh:+.1f}")
                     d1, d2, d3 = st.columns(3)
-                    d1.metric("RL Sharpe",           f"{rl_res['sharpe']:.2f}")
-                    d2.metric("KB Sharpe",           f"{kb_res['sharpe']:.2f}")
-                    d1.metric("RL Max Düşüş",        f"%{rl_res['max_drawdown']:.1f}")
-                    d2.metric("KB Max Düşüş",        f"%{kb_res['max_drawdown_pct']:.1f}")
-                    d1.metric("RL İşlem / Win",      f"{rl_res['n_trades']} / %{rl_res['win_rate']:.0f}")
-                    d2.metric("KB İşlem / Win",      f"{kb_res['total_trades']} / %{kb_res['win_rate']:.0f}")
+                    d1.metric("RL Sharpe", f"{rl_res['sharpe']:.2f}")
+                    d2.metric("KB Sharpe", f"{kb_res['sharpe']:.2f}")
+                    d1.metric("RL Max Düşüş", f"%{rl_res['max_drawdown']:.1f}")
+                    d2.metric("KB Max Düşüş", f"%{kb_res['max_drawdown_pct']:.1f}")
+                    d1.metric(
+                        "RL İşlem / Win",
+                        f"{rl_res['n_trades']} / %{rl_res['win_rate']:.0f}",
+                    )
+                    d2.metric(
+                        "KB İşlem / Win",
+                        f"{kb_res['total_trades']} / %{kb_res['win_rate']:.0f}",
+                    )
                 else:
                     m1, m2, m3, m4, m5 = st.columns(5)
-                    m1.metric("RL Getiri", f"%{ret:+.1f}",
-                               delta=f"{ret - bh:+.1f}% vs B&H")
+                    m1.metric(
+                        "RL Getiri", f"%{ret:+.1f}", delta=f"{ret - bh:+.1f}% vs B&H"
+                    )
                     m2.metric("Buy & Hold", f"%{bh:+.1f}")
                     m3.metric("İşlem Sayısı", rl_res["n_trades"])
                     m4.metric("Win Rate", f"%{rl_res['win_rate']:.0f}")
                     m5.metric("Max Drawdown", f"%{rl_res['max_drawdown']:.1f}")
 
                 # ── Grafik ─────────────────────────────────────────────────
-                curve  = rl_res.get("portfolio_curve")
+                curve = rl_res.get("portfolio_curve")
                 trades = rl_res.get("trades", [])
                 initial_capital = 100_000.0
 
                 if curve is not None and len(curve) > 0:
                     import plotly.graph_objects as go
+
                     fig_rl = go.Figure()
 
                     # RL portfolio çizgisi
-                    fig_rl.add_trace(go.Scatter(
-                        x=curve.index, y=curve.values,
-                        name="RL Ajanı",
-                        line=dict(color="#3498db", width=2),
-                        hovertemplate="%{x|%d %b %Y}<br>%{y:,.0f} TL<extra></extra>",
-                    ))
+                    fig_rl.add_trace(
+                        go.Scatter(
+                            x=curve.index,
+                            y=curve.values,
+                            name="RL Ajanı",
+                            line=dict(color="#3498db", width=2),
+                            hovertemplate="%{x|%d %b %Y}<br>%{y:,.0f} TL<extra></extra>",
+                        )
+                    )
 
                     # Kural tabanlı eğrisi
                     if kb_res and "df" in kb_res:
@@ -867,54 +1169,91 @@ with tab5:
                         # RL ile aynı başlangıç noktasına normalize et
                         if len(kb_eq) > 0:
                             kb_eq = kb_eq * (initial_capital / kb_eq.iloc[0])
-                            fig_rl.add_trace(go.Scatter(
-                                x=kb_eq.index, y=kb_eq.values,
-                                name="Kural Tabanlı",
-                                line=dict(color="#f39c12", width=2, dash="dot"),
-                                hovertemplate="%{x|%d %b %Y}<br>%{y:,.0f} TL<extra></extra>",
-                            ))
+                            fig_rl.add_trace(
+                                go.Scatter(
+                                    x=kb_eq.index,
+                                    y=kb_eq.values,
+                                    name="Kural Tabanlı",
+                                    line=dict(color="#f39c12", width=2, dash="dot"),
+                                    hovertemplate="%{x|%d %b %Y}<br>%{y:,.0f} TL<extra></extra>",
+                                )
+                            )
 
                     # B&H referans çizgisi
                     if len(curve) > 0:
                         from rl_backtester import run_rl_backtest as _rl  # noqa
                         import yfinance as yf
+
                         try:
-                            _bh_df = yf.Ticker(rl_symbol).history(period=rl_period, interval="1d")
+                            _bh_df = yf.Ticker(rl_symbol).history(
+                                period=rl_period, interval="1d"
+                            )
                             if not _bh_df.empty:
-                                _bh_close = _bh_df["Close"].loc[curve.index[0]:curve.index[-1]]
-                                _bh_curve = initial_capital * _bh_close / _bh_close.iloc[0]
-                                fig_rl.add_trace(go.Scatter(
-                                    x=_bh_curve.index, y=_bh_curve.values,
-                                    name="Buy & Hold",
-                                    line=dict(color="#95a5a6", width=1, dash="dash"),
-                                    hovertemplate="%{x|%d %b %Y}<br>%{y:,.0f} TL<extra></extra>",
-                                ))
+                                _bh_close = _bh_df["Close"].loc[
+                                    curve.index[0] : curve.index[-1]
+                                ]
+                                _bh_curve = (
+                                    initial_capital * _bh_close / _bh_close.iloc[0]
+                                )
+                                fig_rl.add_trace(
+                                    go.Scatter(
+                                        x=_bh_curve.index,
+                                        y=_bh_curve.values,
+                                        name="Buy & Hold",
+                                        line=dict(
+                                            color="#95a5a6", width=1, dash="dash"
+                                        ),
+                                        hovertemplate="%{x|%d %b %Y}<br>%{y:,.0f} TL<extra></extra>",
+                                    )
+                                )
                         except Exception:
                             pass
 
                     # AL işaretleri
                     buy_dates = [t["buy_date"] for t in trades if t.get("buy_date")]
-                    buy_vals  = [curve.iloc[curve.index.get_indexer([d], method="nearest")[0]]
-                                 for d in buy_dates]
+                    buy_vals = [
+                        curve.iloc[curve.index.get_indexer([d], method="nearest")[0]]
+                        for d in buy_dates
+                    ]
                     if buy_dates:
-                        fig_rl.add_trace(go.Scatter(
-                            x=buy_dates, y=buy_vals, mode="markers", name="AL",
-                            marker=dict(symbol="triangle-up", color="#2ecc71", size=14,
-                                        line=dict(color="white", width=1)),
-                            hovertemplate="AL<br>%{x|%d %b %Y}<br>%{y:,.0f} TL<extra></extra>",
-                        ))
+                        fig_rl.add_trace(
+                            go.Scatter(
+                                x=buy_dates,
+                                y=buy_vals,
+                                mode="markers",
+                                name="AL",
+                                marker=dict(
+                                    symbol="triangle-up",
+                                    color="#2ecc71",
+                                    size=14,
+                                    line=dict(color="white", width=1),
+                                ),
+                                hovertemplate="AL<br>%{x|%d %b %Y}<br>%{y:,.0f} TL<extra></extra>",
+                            )
+                        )
 
                     # SAT işaretleri
                     sell_dates = [t["sell_date"] for t in trades if t.get("sell_date")]
-                    sell_vals  = [curve.iloc[curve.index.get_indexer([d], method="nearest")[0]]
-                                  for d in sell_dates]
+                    sell_vals = [
+                        curve.iloc[curve.index.get_indexer([d], method="nearest")[0]]
+                        for d in sell_dates
+                    ]
                     if sell_dates:
-                        fig_rl.add_trace(go.Scatter(
-                            x=sell_dates, y=sell_vals, mode="markers", name="SAT",
-                            marker=dict(symbol="triangle-down", color="#e74c3c", size=14,
-                                        line=dict(color="white", width=1)),
-                            hovertemplate="SAT<br>%{x|%d %b %Y}<br>%{y:,.0f} TL<extra></extra>",
-                        ))
+                        fig_rl.add_trace(
+                            go.Scatter(
+                                x=sell_dates,
+                                y=sell_vals,
+                                mode="markers",
+                                name="SAT",
+                                marker=dict(
+                                    symbol="triangle-down",
+                                    color="#e74c3c",
+                                    size=14,
+                                    line=dict(color="white", width=1),
+                                ),
+                                hovertemplate="SAT<br>%{x|%d %b %Y}<br>%{y:,.0f} TL<extra></extra>",
+                            )
+                        )
 
                     fig_rl.update_layout(
                         title=f"Strateji Karşılaştırması — {rl_symbol}",
@@ -930,8 +1269,10 @@ with tab5:
                 if trades:
                     st.subheader(f"📋 RL İşlemleri ({len(trades)} adet)")
                     tr_df = pd.DataFrame(trades)
+
                     def _color_pnl(val):
                         return f"color: {'#2ecc71' if val > 0 else '#e74c3c'}; font-weight: bold"
+
                     styled_tr = tr_df.style.applymap(_color_pnl, subset=["pnl_pct"])
                     st.dataframe(styled_tr, use_container_width=True)
                 else:
@@ -940,9 +1281,13 @@ with tab5:
         # ── Tüm BIST50 RL Taraması ───────────────────────────────────────
         st.divider()
         st.subheader("🔍 Tüm BIST50'yi RL ile Tara")
-        st.caption("RL ajanını tüm BIST50 hisselerinde çalıştırır ve kural tabanlı stratejiyle karşılaştırır.")
+        st.caption(
+            "RL ajanını tüm BIST50 hisselerinde çalıştırır ve kural tabanlı stratejiyle karşılaştırır."
+        )
 
-        rl_scan_period = st.selectbox("Tarama Periyodu", ["1y", "2y"], index=1, key="rl_scan_period")
+        rl_scan_period = st.selectbox(
+            "Tarama Periyodu", ["1y", "2y"], index=1, key="rl_scan_period"
+        )
 
         if st.button("🤖 Tüm BIST50'yi RL ile Tara", type="primary", key="rl_scan_all"):
             from rl_backtester import run_rl_backtest
@@ -951,34 +1296,46 @@ with tab5:
             rl_progress = st.progress(0, text="RL taraması başlıyor...")
 
             for i, sym in enumerate(BIST50_SYMBOLS):
-                rl_progress.progress((i + 1) / len(BIST50_SYMBOLS),
-                                     text=f"{sym} ({i+1}/{len(BIST50_SYMBOLS)})")
+                rl_progress.progress(
+                    (i + 1) / len(BIST50_SYMBOLS),
+                    text=f"{sym} ({i + 1}/{len(BIST50_SYMBOLS)})",
+                )
                 res = run_rl_backtest(sym, period=rl_scan_period)
                 if res.get("status") == "ok":
-                    rl_rows.append({
-                        "Hisse":          sym.replace(".IS", ""),
-                        "RL Getiri (%)":  res["total_return_pct"],
-                        "Al-Tut (%)":     res["buy_and_hold_pct"],
-                        "RL Farkı (%)":   round(res["total_return_pct"] - res["buy_and_hold_pct"], 1),
-                        "İşlem Sayısı":   res["n_trades"],
-                        "Kazanma (%)":    res["win_rate"],
-                        "Max Düşüş (%)":  res["max_drawdown"],
-                        "Sharpe":         res["sharpe"],
-                    })
+                    rl_rows.append(
+                        {
+                            "Hisse": sym.replace(".IS", ""),
+                            "RL Getiri (%)": res["total_return_pct"],
+                            "Al-Tut (%)": res["buy_and_hold_pct"],
+                            "RL Farkı (%)": round(
+                                res["total_return_pct"] - res["buy_and_hold_pct"], 1
+                            ),
+                            "İşlem Sayısı": res["n_trades"],
+                            "Kazanma (%)": res["win_rate"],
+                            "Max Düşüş (%)": res["max_drawdown"],
+                            "Sharpe": res["sharpe"],
+                        }
+                    )
 
             rl_progress.empty()
 
             if rl_rows:
-                rl_scan_df = pd.DataFrame(rl_rows).sort_values("RL Getiri (%)", ascending=False)
+                rl_scan_df = pd.DataFrame(rl_rows).sort_values(
+                    "RL Getiri (%)", ascending=False
+                )
 
                 # Özet istatistikler
                 sc1, sc2, sc3, sc4 = st.columns(4)
                 rl_profitable = rl_scan_df[rl_scan_df["RL Getiri (%)"] > 0]
-                rl_beat_bh    = rl_scan_df[rl_scan_df["RL Farkı (%)"] > 0]
-                sc1.metric("Karlı Hisse",    f"{len(rl_profitable)}/{len(rl_scan_df)}")
-                sc2.metric("B&H'ı Yenen",    f"{len(rl_beat_bh)}/{len(rl_scan_df)}")
-                sc3.metric("Ort. RL Getiri", f"%{rl_scan_df['RL Getiri (%)'].mean():.1f}")
-                sc4.metric("Ort. RL vs B&H", f"%{rl_scan_df['RL Farkı (%)'].mean():+.1f}")
+                rl_beat_bh = rl_scan_df[rl_scan_df["RL Farkı (%)"] > 0]
+                sc1.metric("Karlı Hisse", f"{len(rl_profitable)}/{len(rl_scan_df)}")
+                sc2.metric("B&H'ı Yenen", f"{len(rl_beat_bh)}/{len(rl_scan_df)}")
+                sc3.metric(
+                    "Ort. RL Getiri", f"%{rl_scan_df['RL Getiri (%)'].mean():.1f}"
+                )
+                sc4.metric(
+                    "Ort. RL vs B&H", f"%{rl_scan_df['RL Farkı (%)'].mean():+.1f}"
+                )
 
                 # Renk kodlu tablo
                 def _color_rl(val):
@@ -996,17 +1353,25 @@ with tab5:
 # ============================================================
 with tab6:
     st.subheader("🔄 Rotasyon Stratejisi Backtesti")
-    st.caption("En güçlü trende girer, kârını alıp başka fırsata geçer. Tüm BIST50 taranır.")
+    st.caption(
+        "En güçlü trende girer, kârını alıp başka fırsata geçer. Tüm BIST50 taranır."
+    )
 
     with st.expander("⚙️ Ayarlar", expanded=True):
         rc1, rc2, rc3, rc4 = st.columns(4)
-        rot_period     = rc1.selectbox("Periyot", ["1y", "2y", "3y"], index=0, key="rot_period")
-        rot_capital    = rc2.number_input("Başlangıç Sermaye", value=100000, step=10000, key="rot_capital")
-        rot_entry_thr  = rc3.slider("Giriş Skoru Eşiği", 55, 80, 62, key="rot_entry")
-        rot_trail      = rc4.slider("Trailing Stop (%)", 5, 15, 8, key="rot_trail")
+        rot_period = rc1.selectbox(
+            "Periyot", ["1y", "2y", "3y"], index=0, key="rot_period"
+        )
+        rot_capital = rc2.number_input(
+            "Başlangıç Sermaye", value=100000, step=10000, key="rot_capital"
+        )
+        rot_entry_thr = rc3.slider("Giriş Skoru Eşiği", 55, 80, 62, key="rot_entry")
+        rot_trail = rc4.slider("Trailing Stop (%)", 5, 15, 8, key="rot_trail")
         rc5, rc6 = st.columns(2)
-        rot_min_hold   = rc5.slider("Min. Tutma (gün)", 3, 20, 5, key="rot_min_hold")
-        rot_exit_score = rc6.slider("Çıkış Skoru Eşiği", 35, 60, 45, key="rot_exit_score")
+        rot_min_hold = rc5.slider("Min. Tutma (gün)", 3, 20, 5, key="rot_min_hold")
+        rot_exit_score = rc6.slider(
+            "Çıkış Skoru Eşiği", 35, 60, 45, key="rot_exit_score"
+        )
 
     if st.button("▶️ Rotasyon Backtestini Çalıştır", key="run_rotation"):
         from rotator import run_rotation_backtest
@@ -1038,7 +1403,8 @@ with tab6:
 
     if "rot_result" in st.session_state:
         import yfinance as yf
-        result     = st.session_state["rot_result"]
+
+        result = st.session_state["rot_result"]
         rot_period = st.session_state.get("rot_period_used", rot_period)
         rot_capital = st.session_state.get("rot_capital_used", rot_capital)
         if True:
@@ -1048,13 +1414,14 @@ with tab6:
             mc1, mc2, mc3, mc4, mc5 = st.columns(5)
             delta_color = "normal" if m["Toplam Getiri (%)"] >= 0 else "inverse"
             mc1.metric("Toplam Getiri", f"%{m['Toplam Getiri (%)']:+.1f}")
-            mc2.metric("Sharpe",        f"{m['Sharpe']:.2f}")
-            mc3.metric("Max Düşüş",     f"%{m['Max Düşüş (%)']:.1f}")
-            mc4.metric("İşlem Sayısı",  m["İşlem Sayısı"])
+            mc2.metric("Sharpe", f"{m['Sharpe']:.2f}")
+            mc3.metric("Max Düşüş", f"%{m['Max Düşüş (%)']:.1f}")
+            mc4.metric("İşlem Sayısı", m["İşlem Sayısı"])
             mc5.metric("Kazanma Oranı", f"%{m['Kazanma (%)']:.1f}")
 
             # ── Portföy eğrisi ──────────────────────────────────────────
             import plotly.graph_objects as go
+
             curve = result["portfolio_curve"]
 
             # B&H karşılaştırması: XU100.IS endeksi
@@ -1066,39 +1433,61 @@ with tab6:
                 bh_norm = None
 
             fig = go.Figure()
-            fig.add_trace(go.Scatter(
-                x=curve.index, y=curve.values,
-                name="Rotasyon Stratejisi",
-                line=dict(color="#2ecc71", width=2),
-            ))
+            fig.add_trace(
+                go.Scatter(
+                    x=curve.index,
+                    y=curve.values,
+                    name="Rotasyon Stratejisi",
+                    line=dict(color="#2ecc71", width=2),
+                )
+            )
             if bh_norm is not None:
-                fig.add_trace(go.Scatter(
-                    x=bh_norm.index, y=bh_norm.values,
-                    name="XU100 B&H",
-                    line=dict(color="#888", width=1.5, dash="dash"),
-                ))
+                fig.add_trace(
+                    go.Scatter(
+                        x=bh_norm.index,
+                        y=bh_norm.values,
+                        name="XU100 B&H",
+                        line=dict(color="#888", width=1.5, dash="dash"),
+                    )
+                )
 
             # Giriş/çıkış noktalarını işaretle
             trades_df = pd.DataFrame(result["trades"])
             if not trades_df.empty:
                 # Timezone uyumsuzluğunu gider — ikisini de tz-naive yap
                 curve_naive = curve.copy()
-                curve_naive.index = curve_naive.index.tz_localize(None) if curve_naive.index.tz is None else curve_naive.index.tz_convert(None)
-                entry_dates = pd.to_datetime(trades_df["Giriş Tarihi"]).dt.tz_localize(None)
-                entry_vals  = curve_naive.reindex(entry_dates.values, method="nearest")
-                exit_dates  = pd.to_datetime(trades_df["Çıkış Tarihi"]).dt.tz_localize(None)
-                exit_vals   = curve_naive.reindex(exit_dates.values, method="nearest")
+                curve_naive.index = (
+                    curve_naive.index.tz_localize(None)
+                    if curve_naive.index.tz is None
+                    else curve_naive.index.tz_convert(None)
+                )
+                entry_dates = pd.to_datetime(trades_df["Giriş Tarihi"]).dt.tz_localize(
+                    None
+                )
+                entry_vals = curve_naive.reindex(entry_dates.values, method="nearest")
+                exit_dates = pd.to_datetime(trades_df["Çıkış Tarihi"]).dt.tz_localize(
+                    None
+                )
+                exit_vals = curve_naive.reindex(exit_dates.values, method="nearest")
 
-                fig.add_trace(go.Scatter(
-                    x=entry_dates, y=entry_vals.values,
-                    mode="markers", name="Giriş",
-                    marker=dict(color="#3498db", size=8, symbol="triangle-up"),
-                ))
-                fig.add_trace(go.Scatter(
-                    x=exit_dates, y=exit_vals.values,
-                    mode="markers", name="Çıkış",
-                    marker=dict(color="#e74c3c", size=8, symbol="triangle-down"),
-                ))
+                fig.add_trace(
+                    go.Scatter(
+                        x=entry_dates,
+                        y=entry_vals.values,
+                        mode="markers",
+                        name="Giriş",
+                        marker=dict(color="#3498db", size=8, symbol="triangle-up"),
+                    )
+                )
+                fig.add_trace(
+                    go.Scatter(
+                        x=exit_dates,
+                        y=exit_vals.values,
+                        mode="markers",
+                        name="Çıkış",
+                        marker=dict(color="#e74c3c", size=8, symbol="triangle-down"),
+                    )
+                )
 
             fig.update_layout(
                 title="Portföy Değeri",
@@ -1106,12 +1495,15 @@ with tab6:
                 yaxis_title="Portföy (TL)",
                 template="plotly_dark",
                 height=420,
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                legend=dict(
+                    orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
+                ),
             )
             st.plotly_chart(fig, use_container_width=True)
 
             # ── İşlem geçmişi ────────────────────────────────────────────
             if not trades_df.empty:
+
                 def _color_trade(val):
                     if isinstance(val, (int, float)):
                         return f"color: {'#2ecc71' if val > 0 else '#e74c3c'}; font-weight: bold"
@@ -1129,62 +1521,90 @@ with tab6:
 
                 # Butonlar
                 btn_cols = st.columns(min(len(unique_syms), 8))
-                if "rot_selected_sym" not in st.session_state or st.session_state["rot_selected_sym"] not in unique_syms:
+                if (
+                    "rot_selected_sym" not in st.session_state
+                    or st.session_state["rot_selected_sym"] not in unique_syms
+                ):
                     st.session_state["rot_selected_sym"] = unique_syms[0]
 
                 for bi, sym_name in enumerate(unique_syms):
                     col_i = bi % len(btn_cols)
                     sym_trades = trades_df[trades_df["Hisse"] == sym_name]
-                    total_pct  = sym_trades["Getiri %"].sum()
+                    total_pct = sym_trades["Getiri %"].sum()
                     label = f"{'🟢' if total_pct >= 0 else '🔴'} {sym_name}"
                     if btn_cols[col_i].button(label, key=f"rot_btn_{sym_name}"):
                         st.session_state["rot_selected_sym"] = sym_name
 
                 # Seçili hisse grafiği
-                sel_sym  = st.session_state["rot_selected_sym"]
+                sel_sym = st.session_state["rot_selected_sym"]
                 sel_full = sel_sym + ".IS"
                 sym_trades_sel = trades_df[trades_df["Hisse"] == sel_sym]
 
                 try:
-                    price_df = yf.Ticker(sel_full).history(period=rot_period, interval="1d")
-                    price_df.index = price_df.index.tz_convert(None) if price_df.index.tz else price_df.index
+                    price_df = yf.Ticker(sel_full).history(
+                        period=rot_period, interval="1d"
+                    )
+                    price_df.index = (
+                        price_df.index.tz_convert(None)
+                        if price_df.index.tz
+                        else price_df.index
+                    )
 
                     fig2 = go.Figure()
-                    fig2.add_trace(go.Scatter(
-                        x=price_df.index, y=price_df["Close"],
-                        name=sel_sym, line=dict(color="#aaaaaa", width=1.5),
-                    ))
+                    fig2.add_trace(
+                        go.Scatter(
+                            x=price_df.index,
+                            y=price_df["Close"],
+                            name=sel_sym,
+                            line=dict(color="#aaaaaa", width=1.5),
+                        )
+                    )
 
                     for _, tr in sym_trades_sel.iterrows():
-                        buy_dt  = pd.Timestamp(tr["Giriş Tarihi"])
+                        buy_dt = pd.Timestamp(tr["Giriş Tarihi"])
                         sell_dt = pd.Timestamp(tr["Çıkış Tarihi"])
-                        color   = "#2ecc71" if tr["Getiri %"] >= 0 else "#e74c3c"
+                        color = "#2ecc71" if tr["Getiri %"] >= 0 else "#e74c3c"
 
                         # Al noktası
-                        fig2.add_trace(go.Scatter(
-                            x=[buy_dt], y=[tr["Giriş Fiyatı"]],
-                            mode="markers+text",
-                            marker=dict(color="#3498db", size=12, symbol="triangle-up"),
-                            text=[f"AL<br>{tr['Giriş Fiyatı']:.2f}"],
-                            textposition="top center",
-                            textfont=dict(size=10, color="#3498db"),
-                            showlegend=False,
-                        ))
+                        fig2.add_trace(
+                            go.Scatter(
+                                x=[buy_dt],
+                                y=[tr["Giriş Fiyatı"]],
+                                mode="markers+text",
+                                marker=dict(
+                                    color="#3498db", size=12, symbol="triangle-up"
+                                ),
+                                text=[f"AL<br>{tr['Giriş Fiyatı']:.2f}"],
+                                textposition="top center",
+                                textfont=dict(size=10, color="#3498db"),
+                                showlegend=False,
+                            )
+                        )
                         # Sat noktası
-                        fig2.add_trace(go.Scatter(
-                            x=[sell_dt], y=[tr["Çıkış Fiyatı"]],
-                            mode="markers+text",
-                            marker=dict(color=color, size=12, symbol="triangle-down"),
-                            text=[f"SAT<br>{tr['Çıkış Fiyatı']:.2f}<br>{tr['Getiri %']:+.1f}%"],
-                            textposition="bottom center",
-                            textfont=dict(size=10, color=color),
-                            showlegend=False,
-                        ))
+                        fig2.add_trace(
+                            go.Scatter(
+                                x=[sell_dt],
+                                y=[tr["Çıkış Fiyatı"]],
+                                mode="markers+text",
+                                marker=dict(
+                                    color=color, size=12, symbol="triangle-down"
+                                ),
+                                text=[
+                                    f"SAT<br>{tr['Çıkış Fiyatı']:.2f}<br>{tr['Getiri %']:+.1f}%"
+                                ],
+                                textposition="bottom center",
+                                textfont=dict(size=10, color=color),
+                                showlegend=False,
+                            )
+                        )
                         # Al-Sat arası bölge
                         fig2.add_vrect(
-                            x0=buy_dt, x1=sell_dt,
-                            fillcolor=color, opacity=0.07,
-                            layer="below", line_width=0,
+                            x0=buy_dt,
+                            x1=sell_dt,
+                            fillcolor=color,
+                            opacity=0.07,
+                            layer="below",
+                            line_width=0,
                         )
 
                     total_kar = sym_trades_sel["Kâr/Zarar"].sum()
@@ -1200,25 +1620,41 @@ with tab6:
 
                     # Bu hissenin işlem detayları
                     st.dataframe(
-                        sym_trades_sel.style.applymap(_color_trade, subset=["Kâr/Zarar", "Getiri %"]),
-                        use_container_width=True, height=200,
+                        sym_trades_sel.style.applymap(
+                            _color_trade, subset=["Kâr/Zarar", "Getiri %"]
+                        ),
+                        use_container_width=True,
+                        height=200,
                     )
                 except Exception as e:
                     st.warning(f"{sel_sym} grafiği yüklenemedi: {e}")
 
                 # En çok girilen hisseler
                 st.subheader("🏆 Özet")
-                top_syms = trades_df.groupby("Hisse").agg(
-                    İşlem=("Hisse", "count"),
-                    Ort_Getiri=("Getiri %", "mean"),
-                    Toplam_Kar=("Kâr/Zarar", "sum"),
-                ).sort_values("Toplam_Kar", ascending=False).reset_index()
-                top_syms.columns = ["Hisse", "İşlem Sayısı", "Ort. Getiri %", "Toplam Kâr (TL)"]
+                top_syms = (
+                    trades_df.groupby("Hisse")
+                    .agg(
+                        İşlem=("Hisse", "count"),
+                        Ort_Getiri=("Getiri %", "mean"),
+                        Toplam_Kar=("Kâr/Zarar", "sum"),
+                    )
+                    .sort_values("Toplam_Kar", ascending=False)
+                    .reset_index()
+                )
+                top_syms.columns = [
+                    "Hisse",
+                    "İşlem Sayısı",
+                    "Ort. Getiri %",
+                    "Toplam Kâr (TL)",
+                ]
                 top_syms["Ort. Getiri %"] = top_syms["Ort. Getiri %"].round(2)
                 top_syms["Toplam Kâr (TL)"] = top_syms["Toplam Kâr (TL)"].round(2)
-                st.dataframe(top_syms.style.applymap(
-                    _color_trade, subset=["Ort. Getiri %", "Toplam Kâr (TL)"]
-                ), use_container_width=True)
+                st.dataframe(
+                    top_syms.style.applymap(
+                        _color_trade, subset=["Ort. Getiri %", "Toplam Kâr (TL)"]
+                    ),
+                    use_container_width=True,
+                )
 
 # ============================================================
 # TAB 7 — TEMEL ANALİZ (Piotroski F-Score)
@@ -1227,11 +1663,17 @@ with tab7:
     from fundamental import get_piotroski
 
     st.subheader("📋 Temel Analiz — Piotroski F-Score")
-    st.caption("9 objektif finansal kriter üzerinden şirket sağlığını ölçer. Veri: yfinance (yıllık finansallar).")
+    st.caption(
+        "9 objektif finansal kriter üzerinden şirket sağlığını ölçer. Veri: yfinance (yıllık finansallar)."
+    )
 
     fa_display_names = [s.replace(".IS", "") for s in BIST50_SYMBOLS]
-    fa_selected = st.selectbox("Hisse Seçin", fa_display_names,
-                               index=fa_display_names.index("THYAO"), key="fa_symbol")
+    fa_selected = st.selectbox(
+        "Hisse Seçin",
+        fa_display_names,
+        index=fa_display_names.index("THYAO"),
+        key="fa_symbol",
+    )
     fa_symbol = fa_selected + ".IS"
 
     if st.button("📊 F-Score Hesapla", key="fa_run"):
@@ -1242,7 +1684,7 @@ with tab7:
 
     if "fa_result" in st.session_state:
         fa_result = st.session_state["fa_result"]
-        fa_sym    = st.session_state.get("fa_symbol_used", fa_selected)
+        fa_sym = st.session_state.get("fa_symbol_used", fa_selected)
 
         if fa_result["error"]:
             st.error(f"Veri alınamadı: {fa_result['error']}")
@@ -1251,26 +1693,38 @@ with tab7:
             label = fa_result["label"]
 
             # ── Skor göstergesi ───────────────────────────────────────
-            score_colors = {"Zayıf": "#d32f2f", "Nötr": "#f57c00", "İyi": "#388e3c", "Güçlü": "#1565c0"}
-            score_color  = score_colors.get(label, "#555")
+            score_colors = {
+                "Zayıf": "#d32f2f",
+                "Nötr": "#f57c00",
+                "İyi": "#388e3c",
+                "Güçlü": "#1565c0",
+            }
+            score_color = score_colors.get(label, "#555")
 
-            st.markdown(f"""
+            st.markdown(
+                f"""
             <div style="background:{score_color};border-radius:12px;padding:20px 30px;display:inline-block;margin-bottom:16px;">
                 <span style="font-size:2.5rem;font-weight:bold;color:#fff;">{score}/9</span>
                 <span style="font-size:1.2rem;color:#fff;margin-left:12px;">{label}</span>
                 <br><span style="color:#eee;font-size:0.85rem;">{fa_sym} Piotroski F-Score</span>
             </div>
-            """, unsafe_allow_html=True)
+            """,
+                unsafe_allow_html=True,
+            )
 
             # ── Kriter tablosu ────────────────────────────────────────
             st.markdown("### Kriter Detayı")
             groups = ["Karlılık", "Kaldıraç & Likidite", "Operasyonel Verimlilik"]
-            group_icons = {"Karlılık": "💰", "Kaldıraç & Likidite": "🏦", "Operasyonel Verimlilik": "⚙️"}
+            group_icons = {
+                "Karlılık": "💰",
+                "Kaldıraç & Likidite": "🏦",
+                "Operasyonel Verimlilik": "⚙️",
+            }
 
             for grp in groups:
                 grp_criteria = [c for c in fa_result["criteria"] if c["group"] == grp]
-                grp_score    = sum(1 for c in grp_criteria if c["passed"])
-                grp_total    = len(grp_criteria)
+                grp_score = sum(1 for c in grp_criteria if c["passed"])
+                grp_total = len(grp_criteria)
                 st.markdown(f"**{group_icons[grp]} {grp}** — {grp_score}/{grp_total}")
 
                 for c in grp_criteria:
@@ -1286,10 +1740,10 @@ with tab7:
             st.markdown("---")
             metrics = fa_result.get("metrics", {})
             group_icons = {
-                "Değerleme":       "💰",
-                "Kârlılık":        "📈",
+                "Değerleme": "💰",
+                "Kârlılık": "📈",
                 "Finansal Sağlık": "🏦",
-                "Büyüme (YoY)":    "🚀",
+                "Büyüme (YoY)": "🚀",
             }
             for grp_name, grp_items in metrics.items():
                 icon = group_icons.get(grp_name, "📊")
@@ -1315,10 +1769,13 @@ with tab7:
     # ── BIST50 Tarama ────────────────────────────────────────────────────────
     st.markdown("---")
     st.subheader("🔍 BIST50 F-Score Tarama")
-    st.caption("Tüm BIST50 hisselerini Piotroski skoru ve temel metriklerle sıralar. "
-               "İlk tarama ~2 dk sürebilir; sonraki taramalar önbellekten hızlıdır.")
+    st.caption(
+        "Tüm BIST50 hisselerini Piotroski skoru ve temel metriklerle sıralar. "
+        "İlk tarama ~2 dk sürebilir; sonraki taramalar önbellekten hızlıdır."
+    )
 
     if st.button("🔍 Tüm BIST50'yi Tara", key="fa_scan_all"):
+
         def _mv(m, group, label):
             """Metrics dict'inden değer al; None ise '—' döndür."""
             for lbl, val, _ in m.get(group, []):
@@ -1334,7 +1791,7 @@ with tab7:
             return None
 
         rows = []
-        prog_bar  = st.progress(0)
+        prog_bar = st.progress(0)
         status_tx = st.empty()
         total = len(BIST50_SYMBOLS)
 
@@ -1348,26 +1805,37 @@ with tab7:
             prog_bar.progress((i + 1) / total)
 
             if res.get("error") or res["score"] is None:
-                rows.append({
-                    "Hisse": short, "F-Score": None, "Durum": res.get("label", "Hata"),
-                    "F/K": None, "PD/DD": None, "EV/FAVÖK": None,
-                    "Net Marj": "—", "ROE": "—", "Gelir Büy.": "—", "Temettü": "—",
-                })
+                rows.append(
+                    {
+                        "Hisse": short,
+                        "F-Score": None,
+                        "Durum": res.get("label", "Hata"),
+                        "F/K": None,
+                        "PD/DD": None,
+                        "EV/FAVÖK": None,
+                        "Net Marj": "—",
+                        "ROE": "—",
+                        "Gelir Büy.": "—",
+                        "Temettü": "—",
+                    }
+                )
                 continue
 
             m = res["metrics"]
-            rows.append({
-                "Hisse":      short,
-                "F-Score":    res["score"],
-                "Durum":      res["label"],
-                "F/K":        _mvn(m, "Değerleme", "F/K"),
-                "PD/DD":      _mvn(m, "Değerleme", "PD/DD"),
-                "EV/FAVÖK":   _mvn(m, "Değerleme", "EV/FAVÖK"),
-                "Net Marj":   _mv(m, "Kârlılık", "Net Marj"),
-                "ROE":        _mv(m, "Kârlılık", "ROE"),
-                "Gelir Büy.": _mv(m, "Büyüme (YoY)", "Gelir Büyümesi"),
-                "Temettü":    _mv(m, "Büyüme (YoY)", "Temettü Verimi"),
-            })
+            rows.append(
+                {
+                    "Hisse": short,
+                    "F-Score": res["score"],
+                    "Durum": res["label"],
+                    "F/K": _mvn(m, "Değerleme", "F/K"),
+                    "PD/DD": _mvn(m, "Değerleme", "PD/DD"),
+                    "EV/FAVÖK": _mvn(m, "Değerleme", "EV/FAVÖK"),
+                    "Net Marj": _mv(m, "Kârlılık", "Net Marj"),
+                    "ROE": _mv(m, "Kârlılık", "ROE"),
+                    "Gelir Büy.": _mv(m, "Büyüme (YoY)", "Gelir Büyümesi"),
+                    "Temettü": _mv(m, "Büyüme (YoY)", "Temettü Verimi"),
+                }
+            )
 
         prog_bar.empty()
         status_tx.empty()
@@ -1377,17 +1845,19 @@ with tab7:
 
     if "fa_scan_result" in st.session_state:
         scan_rows = st.session_state["fa_scan_result"]
-        scan_df   = pd.DataFrame(scan_rows)
+        scan_df = pd.DataFrame(scan_rows)
 
         # Filtre
-        filter_opts   = ["Tümü", "Güçlü", "İyi", "Nötr", "Zayıf", "Hata"]
-        scan_filter   = st.radio("Filtre", filter_opts, horizontal=True, key="fa_scan_filter")
+        filter_opts = ["Tümü", "Güçlü", "İyi", "Nötr", "Zayıf", "Hata"]
+        scan_filter = st.radio(
+            "Filtre", filter_opts, horizontal=True, key="fa_scan_filter"
+        )
         if scan_filter != "Tümü":
             scan_df = scan_df[scan_df["Durum"] == scan_filter]
 
-        scan_df = (scan_df
-                   .sort_values("F-Score", ascending=False, na_position="last")
-                   .reset_index(drop=True))
+        scan_df = scan_df.sort_values(
+            "F-Score", ascending=False, na_position="last"
+        ).reset_index(drop=True)
         scan_df.index = scan_df.index + 1  # 1-tabanlı sıra
 
         def _color_fscore(val):
@@ -1421,36 +1891,64 @@ with tab8:
     with st.expander("⚙️ Strateji Ayarları", expanded=True):
         c1, c2, c3 = st.columns(3)
         with c1:
-            combo_date_mode = st.radio("Tarih Modu", ["Periyot", "Sabit Aralık"],
-                                       horizontal=True, key="cb_date_mode")
+            combo_date_mode = st.radio(
+                "Tarih Modu",
+                ["Periyot", "Sabit Aralık"],
+                horizontal=True,
+                key="cb_date_mode",
+            )
             if combo_date_mode == "Periyot":
-                combo_period = st.selectbox("Periyot", ["6mo", "1y", "2y", "3y"],
-                                            index=2, key="cb_period")
+                combo_period = st.selectbox(
+                    "Periyot", ["6mo", "1y", "2y", "3y"], index=2, key="cb_period"
+                )
                 combo_start = combo_end = None
             else:
                 import datetime
-                combo_start = st.date_input("Başlangıç", value=datetime.date(2024, 1, 1), key="cb_start")
-                combo_end   = st.date_input("Bitiş",     value=datetime.date(2025, 12, 31), key="cb_end")
+
+                combo_start = st.date_input(
+                    "Başlangıç", value=datetime.date(2024, 1, 1), key="cb_start"
+                )
+                combo_end = st.date_input(
+                    "Bitiş", value=datetime.date(2025, 12, 31), key="cb_end"
+                )
                 combo_period = None
-            combo_capital = st.number_input("Başlangıç Sermaye (TL)",
-                                            value=100_000, step=10_000, key="cb_capital")
+            combo_capital = st.number_input(
+                "Başlangıç Sermaye (TL)", value=100_000, step=10_000, key="cb_capital"
+            )
         with c2:
-            combo_entry   = st.slider("Giriş Skoru Eşiği", 50, 85, 65, key="cb_entry")
-            combo_trail   = st.slider("Trailing Stop (%)", 3.0, 15.0, 6.0, 0.5, key="cb_trail")
+            combo_entry = st.slider("Giriş Skoru Eşiği", 50, 85, 65, key="cb_entry")
+            combo_trail = st.slider(
+                "Trailing Stop (%)", 3.0, 15.0, 6.0, 0.5, key="cb_trail"
+            )
             combo_minhold = st.slider("Min. Tutma (gün)", 1, 20, 7, key="cb_minhold")
-            combo_exit_sc = st.slider("Çıkış Skoru Eşiği", 30, 60, 48, key="cb_exit_sc",
-                                      help="Skor bu değerin altına düşerse çık")
+            combo_exit_sc = st.slider(
+                "Çıkış Skoru Eşiği",
+                30,
+                60,
+                48,
+                key="cb_exit_sc",
+                help="Skor bu değerin altına düşerse çık",
+            )
         with c3:
-            combo_use_ma200    = st.toggle("📈 MA200 Filtresi", value=True, key="cb_ma200")
-            combo_min_fscore   = st.slider("🏦 Min F-Score", 0, 9, 5, key="cb_fscore",
-                                           help="0 = filtre kapalı")
-            combo_use_sector   = st.toggle("🏭 Sektör Endeksi Filtresi", value=False, key="cb_sektor",
-                                           help="XBANK/XELKT/... MA50 altındaysa o sektöre girme")
-            combo_use_rl       = st.toggle("🤖 RL Çıkış Sinyali", value=True, key="cb_rl",
-                                           help="PPO modeli SAT diyorsa pozisyonu erken kapat")
+            combo_use_ma200 = st.toggle("📈 MA200 Filtresi", value=True, key="cb_ma200")
+            combo_min_fscore = st.slider(
+                "🏦 Min F-Score", 0, 9, 5, key="cb_fscore", help="0 = filtre kapalı"
+            )
+            combo_use_sector = st.toggle(
+                "🏭 Sektör Endeksi Filtresi",
+                value=False,
+                key="cb_sektor",
+                help="XBANK/XELKT/... MA50 altındaysa o sektöre girme",
+            )
+            combo_use_rl = st.toggle(
+                "🤖 RL Çıkış Sinyali",
+                value=True,
+                key="cb_rl",
+                help="PPO modeli SAT diyorsa pozisyonu erken kapat",
+            )
 
     if st.button("▶ Kombine Backtest Çalıştır", key="cb_run", type="primary"):
-        prog_ph   = st.progress(0)
+        prog_ph = st.progress(0)
         status_ph = st.empty()
 
         def _cb_prog(pct, msg):
@@ -1459,22 +1957,23 @@ with tab8:
 
         with st.spinner("Hesaplanıyor..."):
             cb_result = run_combo_backtest(
-                symbols               = BIST50_SYMBOLS,
-                period                = combo_period,
-                start_date            = str(combo_start) if combo_start else None,
-                end_date              = str(combo_end)   if combo_end   else None,
-                initial_capital       = float(combo_capital),
-                entry_threshold       = combo_entry,
-                trail_pct             = combo_trail,
-                min_hold_days         = combo_minhold,
-                exit_score_threshold  = combo_exit_sc,
-                use_ma200             = combo_use_ma200,
-                min_fscore            = combo_min_fscore,
-                use_sector_filter     = combo_use_sector,
-                use_rl                = combo_use_rl,
-                progress_callback     = _cb_prog,
+                symbols=BIST50_SYMBOLS,
+                period=combo_period,
+                start_date=str(combo_start) if combo_start else None,
+                end_date=str(combo_end) if combo_end else None,
+                initial_capital=float(combo_capital),
+                entry_threshold=combo_entry,
+                trail_pct=combo_trail,
+                min_hold_days=combo_minhold,
+                exit_score_threshold=combo_exit_sc,
+                use_ma200=combo_use_ma200,
+                min_fscore=combo_min_fscore,
+                use_sector_filter=combo_use_sector,
+                use_rl=combo_use_rl,
+                progress_callback=_cb_prog,
             )
-        prog_ph.empty(); status_ph.empty()
+        prog_ph.empty()
+        status_ph.empty()
 
         if "error" in cb_result:
             st.error(cb_result["error"])
@@ -1483,29 +1982,37 @@ with tab8:
 
     if "cb_result" in st.session_state:
         cb = st.session_state["cb_result"]
-        m  = cb["metrics"]
+        m = cb["metrics"]
 
         # ── Metrik kartları ────────────────────────────────────────────
         st.markdown("---")
         mc1, mc2, mc3, mc4, mc5 = st.columns(5)
         ret_color = "normal" if m["Toplam Getiri (%)"] >= 0 else "inverse"
-        mc1.metric("Toplam Getiri",  f"%{m['Toplam Getiri (%)']:+.1f}")
-        mc2.metric("Sharpe",          f"{m['Sharpe']:.2f}")
-        mc3.metric("Max Düşüş",       f"%{m['Max Düşüş (%)']:.1f}")
-        mc4.metric("İşlem Sayısı",    m["İşlem Sayısı"])
-        mc5.metric("Kazanma Oranı",   f"%{m['Kazanma (%)']:.1f}")
+        mc1.metric("Toplam Getiri", f"%{m['Toplam Getiri (%)']:+.1f}")
+        mc2.metric("Sharpe", f"{m['Sharpe']:.2f}")
+        mc3.metric("Max Düşüş", f"%{m['Max Düşüş (%)']:.1f}")
+        mc4.metric("İşlem Sayısı", m["İşlem Sayısı"])
+        mc5.metric("Kazanma Oranı", f"%{m['Kazanma (%)']:.1f}")
 
         # Aktif filtreler
         fu = cb.get("filters_used", {})
         badges = []
-        if fu.get("ma200"):   badges.append("✅ MA200")
-        else:                 badges.append("⬜ MA200")
-        if fu.get("fscore"):  badges.append(f"✅ F-Score≥{combo_min_fscore}")
-        else:                 badges.append("⬜ F-Score")
-        if fu.get("sektor"):  badges.append("✅ Sektör")
-        else:                 badges.append("⬜ Sektör")
-        if fu.get("rl"):      badges.append("✅ RL Çıkış")
-        else:                 badges.append("⬜ RL Çıkış")
+        if fu.get("ma200"):
+            badges.append("✅ MA200")
+        else:
+            badges.append("⬜ MA200")
+        if fu.get("fscore"):
+            badges.append(f"✅ F-Score≥{combo_min_fscore}")
+        else:
+            badges.append("⬜ F-Score")
+        if fu.get("sektor"):
+            badges.append("✅ Sektör")
+        else:
+            badges.append("⬜ Sektör")
+        if fu.get("rl"):
+            badges.append("✅ RL Çıkış")
+        else:
+            badges.append("⬜ RL Çıkış")
         st.caption("Aktif filtreler: " + " &nbsp; ".join(badges))
 
         # ── Portföy grafiği ───────────────────────────────────────────
@@ -1514,18 +2021,33 @@ with tab8:
 
         try:
             import plotly.graph_objects as go
+
             if combo_start and combo_end:
-                bist_bh = yf.Ticker("XU100.IS").history(start=str(combo_start), end=str(combo_end))["Close"]
+                bist_bh = yf.Ticker("XU100.IS").history(
+                    start=str(combo_start), end=str(combo_end)
+                )["Close"]
             else:
                 bist_bh = yf.Ticker("XU100.IS").history(period=combo_period)["Close"]
-            bist_bh = (bist_bh / bist_bh.iloc[0] * float(combo_capital))
+            bist_bh = bist_bh / bist_bh.iloc[0] * float(combo_capital)
             bist_bh.index = bist_bh.index.tz_convert(None)
 
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=curve.index, y=curve.values,
-                                     name="Kombine Strateji", line=dict(color="#00e676", width=2)))
-            fig.add_trace(go.Scatter(x=bist_bh.index, y=bist_bh.values,
-                                     name="XU100 B&H", line=dict(color="#aaa", width=1.5, dash="dash")))
+            fig.add_trace(
+                go.Scatter(
+                    x=curve.index,
+                    y=curve.values,
+                    name="Kombine Strateji",
+                    line=dict(color="#00e676", width=2),
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=bist_bh.index,
+                    y=bist_bh.values,
+                    name="XU100 B&H",
+                    line=dict(color="#aaa", width=1.5, dash="dash"),
+                )
+            )
 
             # Giriş/çıkış işaretleri
             trades_df = pd.DataFrame(cb["trades"]) if cb["trades"] else pd.DataFrame()
@@ -1533,22 +2055,32 @@ with tab8:
                 entries = trades_df.copy()
                 entries["x"] = pd.to_datetime(entries["Giriş Tarihi"])
                 entries["y"] = entries["Giriş Fiyatı"]
-                fig.add_trace(go.Scatter(
-                    x=entries["x"], y=curve.reindex(entries["x"], method="nearest").values,
-                    mode="markers", name="Giriş",
-                    marker=dict(symbol="triangle-up", size=10, color="#42a5f5")
-                ))
+                fig.add_trace(
+                    go.Scatter(
+                        x=entries["x"],
+                        y=curve.reindex(entries["x"], method="nearest").values,
+                        mode="markers",
+                        name="Giriş",
+                        marker=dict(symbol="triangle-up", size=10, color="#42a5f5"),
+                    )
+                )
                 exits = trades_df.copy()
                 exits["x"] = pd.to_datetime(exits["Çıkış Tarihi"])
-                fig.add_trace(go.Scatter(
-                    x=exits["x"], y=curve.reindex(exits["x"], method="nearest").values,
-                    mode="markers", name="Çıkış",
-                    marker=dict(symbol="triangle-down", size=10, color="#ef5350")
-                ))
+                fig.add_trace(
+                    go.Scatter(
+                        x=exits["x"],
+                        y=curve.reindex(exits["x"], method="nearest").values,
+                        mode="markers",
+                        name="Çıkış",
+                        marker=dict(symbol="triangle-down", size=10, color="#ef5350"),
+                    )
+                )
 
             fig.update_layout(
-                height=400, template="plotly_dark",
-                xaxis_title="Tarih", yaxis_title="Portföy (TL)",
+                height=400,
+                template="plotly_dark",
+                xaxis_title="Tarih",
+                yaxis_title="Portföy (TL)",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02),
             )
             st.plotly_chart(fig, use_container_width=True)
@@ -1562,11 +2094,17 @@ with tab8:
 
             def _color_trade_cb(val):
                 if isinstance(val, (int, float)):
-                    return "color: #4caf50" if val > 0 else ("color: #f44336" if val < 0 else "")
+                    return (
+                        "color: #4caf50"
+                        if val > 0
+                        else ("color: #f44336" if val < 0 else "")
+                    )
                 return ""
 
             st.dataframe(
-                trades_df.style.applymap(_color_trade_cb, subset=["Kâr/Zarar", "Getiri %"]),
+                trades_df.style.applymap(
+                    _color_trade_cb, subset=["Kâr/Zarar", "Getiri %"]
+                ),
                 use_container_width=True,
             )
 

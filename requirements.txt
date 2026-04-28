@@ -21,3 +21,9 @@ feedparser
 
 gymnasium
 stable-baselines3
+
+# Gelişmiş Haber Analizi (Faz 33)
+transformers
+torch
+apscheduler
+datasets

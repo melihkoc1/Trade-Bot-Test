@@ -1,0 +1,597 @@
+\documentclass[journal]{IEEEtran}
+
+% ── Paketler ─────────────────────────────────────────────────────
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[turkish]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{cite}
+\usepackage{url}
+
+\begin{document}
+
+% ── Başlık ───────────────────────────────────────────────────────
+\title{BIST50 için Hibrit Algoritmik Ticaret Sistemi:\\
+PPO Takviyeli Öğrenme, Yapay Sinir Ağı Tabanlı\\
+Çıkış Sinyali Üretimi ve Temel Analiz Filtresi}
+
+\author{Melih~Erdem~Koçoğlu\\
+İstanbul Topkapı Üniversitesi, Yazılım Mühendisliği\\
+Öğrenci No: 23040301064\\
+erdemkocoglu04@gmail.com}
+
+\maketitle
+
+% ── Özet ─────────────────────────────────────────────────────────
+\begin{abstract}
+Bu çalışmada, Borsa İstanbul 50 (BIST50) hisse senedi evreni için
+geliştirilen \textit{Tradebot~v1} adlı çok katmanlı, tamamen otomatik
+algoritmik ticaret sistemi sunulmaktadır. Sistem üç tamamlayıcı karar
+katmanını birleştirmektedir: (i)~30 teknik göstergeyi değerlendirerek
+$[0,100]$ aralığında bileşik puan üretilen kural tabanlı puanlama
+motoru; (ii)~en yüksek momentuma sahip hisseye döngüsel sermaye
+tahsis eden rotasyon stratejisi; ve (iii)~23 normalize piyasa
+özelliği üzerinde eğitilen Proximal Policy Optimization (PPO)
+takviyeli öğrenme ajanı ile gerçekleştirilen yapay sinir ağı tabanlı
+çıkış sinyali üretimi. Bunlara ek olarak Piotroski F-Skoru, finansal
+açıdan zayıf adayları sermaye taahhüdü öncesinde eleme amacıyla temel
+analiz filtresi olarak kullanılmaktadır. İki yıllık ufukta gerçekleştirilen
+geriye dönük test; bileşik getiri $+96{,}7\%$, Sharpe oranı~1,11 ve
+maksimum düşüş $-27{,}7\%$ (27 tamamlanmış işlem) sonuçlarını
+vermiş; bu değerler al-tut referans stratejisini belirgin biçimde
+geride bırakmıştır. PPO ajanının eklenmesinin tek başına Sharpe
+oranını $0{,}91$'den $1{,}40$'a yükselttiği saptanmıştır.
+\end{abstract}
+
+\begin{IEEEkeywords}
+takviyeli öğrenme, PPO, yapay sinir ağları, BIST50, algoritmik
+ticaret, momentum rotasyonu, Piotroski F-Skoru, özellik mühendisliği.
+\end{IEEEkeywords}
+
+% ─────────────────────────────────────────────────────────────────
+\section{Giriş}
+
+\IEEEPARstart{A}{lgoritmik} ticaret, istatistiksel düzenlilikleri
+sistematik ve duygusuz kararlarla sömürmeyi hedeflemektedir.
+Gelişmiş piyasalar onlarca yıldır nicel stratejiler üzerine
+araştırma birikimi oluşturmuş olsa da~\cite{chan2008}, Türkiye
+Borsa İstanbul gibi gelişmekte olan piyasalar yüksek volatilite,
+keskin sektörel rotasyonlar ve makro kaynaklı fiyat çarpıklıkları
+gibi kendine özgü dinamikler sergilemekte; bu durum özelleştirilmiş
+yaklaşımlar gerektirmektedir.
+
+Kural tabanlı teknik sistemler yorumlanabilir ve hızlıdır; ancak
+rejim değişikliklerine uyum sağlamakta yetersiz kalabilirler.
+Derin takviyeli öğrenme ajanları, doğrusal olmayan politikaları
+öğrenebilmekte~\cite{mnih2015}; fakat büyük veri ile dikkatli ödül
+tasarımı gerektirmektedir. Her iki paradigmayı birleştiren hibrit
+mimariler son literatürde umut verici sonuçlar
+sergilemiştir~\cite{liu2021, carta2021}.
+
+Bu çalışmanın temel katkıları şöyle sıralanabilir:
+\begin{enumerate}
+\item BIST50 dinamiklerine uyarlanmış, sektör-duyarlı ve
+      makro-ilişkili sinyal bileşenleri içeren modüler, 30 kurallı
+      teknik puanlama motoru.
+\item Uyarlanabilir trailing stop mekanizmalı döngüsel momentum
+      rotasyon stratejisi.
+\item \textbf{23 piyasa özelliği üzerinde eğitilen, üç gizli katmanlı
+      MLP politikası kullanan PPO ajanı}; pozisyon-duyarlı gözlemler
+      (gerçekleşmemiş kâr/zarar, tutulan gün sayısı, tepe noktasından
+      düşüş) aracılığıyla erken çıkışları engelleyen yapay sinir ağı
+      tabanlı çıkış sinyali modülü.
+\item Finansal açıdan zayıf ihraçcıları sistematik olarak eleyen
+      Piotroski F-Skoru filtresi.
+\item Docker konteynerinde çalışan, gerçek zamanlı puanlama ve geriye
+      dönük test imkânı sunan etkileşimli Streamlit gösterge paneli.
+\end{enumerate}
+
+Makalenin geri kalanı şu şekilde düzenlenmiştir: Bölüm~II genel
+sistem mimarisini, Bölüm~III teknik puanlama motorunu, Bölüm~IV
+momentum rotasyon stratejisini, Bölüm~V—makalenin ağırlık merkezini
+oluşturan—PPO tabanlı yapay sinir ağı modülünü, Bölüm~VI Piotroski
+temel filtreni, Bölüm~VII deneysel sonuçları, Bölüm~VIII ise
+sonucu sunmaktadır.
+
+% ─────────────────────────────────────────────────────────────────
+\section{Sistem Mimarisi}
+
+\textit{Tradebot~v1}, Python~3.10 ile geliştirilmiş olup gevşek
+bağlı modüller bütününden oluşmaktadır. Veri akışı ve kontrol akışı
+Şekil~1'de özetlenmiştir.
+
+\begin{figure}[ht]
+\centering
+\fbox{\parbox{0.88\linewidth}{\centering\vspace{0.5cm}
+\textbf{Sistem Veri Akışı}\\[6pt]
+\small
+yfinance / KAP / RSS Beslemeleri\\
+$\downarrow$\\
+\texttt{data\_fetcher} $\;\|\;$ \texttt{news\_scraper}\\
+$\downarrow$\\
+\texttt{indicators.py} (OHLCV $\to$ 23 özellik)\\
+$\downarrow$\\
+\texttt{strategy.py} (0--100 skor) $\;\|\;$ \texttt{fundamental.py} (F-Skor)\\
+$\downarrow$\\
+\textbf{\texttt{rl\_environment.py} (Gymnasium ortamı)}\\
+$\downarrow$\\
+\textbf{\texttt{rl\_trainer.py} (PPO -- MLP[256,256,128])}\\
+$\downarrow$\\
+\texttt{combo\_backtester.py} (Rotasyon + RL Çıkış)\\
+$\downarrow$\\
+Streamlit Gösterge Paneli / Docker
+\vspace{0.5cm}}}
+\caption{\textit{Tradebot~v1} yüksek düzey veri ve kontrol akışı.}
+\label{fig:arch}
+\end{figure}
+
+Piyasa verisi \texttt{yfinance} kütüphanesi aracılığıyla \texttt{.IS}
+uzantılı ticker sembolleri kullanılarak alınmaktadır. Haber duyarlılığı
+RSS beslemeleri ve KAP duyurularından toplanmakta; Google Gemini dil
+modeli ile puanlanmakta ve Kural~32 olarak strateji motoruna
+beslenmektedir. Dağıtım artefaktı, tüm bağımlılıkları sabitleyen ve
+model dosyalarını \texttt{models/} dizininden bağlayan bir
+\texttt{docker-compose} yığınıdır.
+
+% ─────────────────────────────────────────────────────────────────
+\section{Teknik Puanlama Motoru}
+
+\texttt{strategy.py}, her aday hisseye $S \in [0,100]$ aralığında
+bileşik bir puan atar. Skor; tarafsız 50 taban değerine eklenen,
+her biri $\delta_k \in [-15,+15]$ kısmi puan döndüren 30 aktif
+kuralın toplamından oluşmaktadır (bkz. Tablo~I).
+
+\begin{table}[ht]
+\caption{Teknik Puanlama Motorundaki Aktif Kurallar}
+\label{tab:rules}
+\centering
+\small
+\renewcommand{\arraystretch}{1.1}
+\begin{tabular}{clc}
+\toprule
+\textbf{Kural} & \textbf{Sinyal Kaynağı} & \textbf{Ağırlık ($\delta$)} \\
+\midrule
+1  & RSI(14) aşırı alım/satım        & $\pm12$ \\
+2  & MACD histogram yönü             & $\pm12$ \\
+3  & SMA9/SMA21 kesişimi             & $\pm8$  \\
+4  & Bollinger Bandı sıkışma/kırılma & $\pm6$  \\
+5  & Fiyat/hacim ıraksama            & $\pm15$ \\
+6  & Hacim artışı ($>1{,}5\times$ ort.) & $\pm8$ \\
+8  & ADX trend gücü                  & $\pm10$ \\
+9  & Çok zaman dilimli haftalık sinyal & $\pm8$ \\
+14 & Temel analiz kalite kapısı      & $\pm10$ \\
+18 & \textbf{XGBoost makine öğrenimi sinyali} & $\pm15$ \\
+19 & \textbf{CNN örüntü tanıma sinyali}       & $\pm15$ \\
+22 & Anomali dedektörü               & $-20$   \\
+23 & Minervini trend şablonu         & $\pm15$ \\
+24 & Analist konsensüsü              & $\pm10$ \\
+26 & \textbf{Prophet topluluk tahmini} & $\pm10$ \\
+32 & \textbf{Haber duyarlılığı (Gemini NLP)} & $\pm10$ \\
+34 & Finansal sıkıntı uyarısı        & $-5$    \\
+36 & SuperTrend yönü                 & $\pm8$  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Kalın yazılmış kurallar (18, 19, 26, 32) yapay zeka tabanlı sinyal
+kaynaklarını temsil etmekte olup toplam $\pm70$ puanlık kümülatif etki
+kapasitesi ile motorun makine öğrenmesi ağırlıklı kısmını
+oluşturmaktadır.
+
+% ─────────────────────────────────────────────────────────────────
+\section{Momentum Rotasyon Stratejisi}
+
+Rotasyon modülü, her ticaret barında tüm BIST50 sembollerine
+$R \in [0,100]$ aralığında basitleştirilmiş bir momentum puanı
+(taban değeri 50) hesaplar. Her bar'da en yüksek $R$ değerine sahip
+hisse, $\theta_{giriş} = 65$ eşiğini aşması ve tüm etkin filtreleri
+geçmesi durumunda seçilmektedir. Trailing stop mekanizması
+($\tau = \%6$) olumsuz piyasa hareketlerinde pozisyonları tasfiye
+ederken, skor düşüş koşulu ($R < 48$) momentum bozulmasında çıkışı
+tetiklemektedir. Aşırı devir hızını bastırmak amacıyla minimum
+tutma süresi 7 bar olarak belirlenmiştir.
+
+% ─────────────────────────────────────────────────────────────────
+\section{PPO Tabanlı Yapay Sinir Ağı Modülü}
+
+Bu bölüm, \textit{Uygulamalı Yapay Sinir Ağları} dersi kapsamında
+sistemin özünü oluşturan takviyeli öğrenme altyapısını ayrıntılı
+biçimde ele almaktadır.
+
+\subsection{Gymnasium Ortam Tasarımı}
+
+\texttt{rl\_environment.py} içinde tanımlanan özel
+\texttt{BISTTradingEnv} sınıfı, OpenAI Gymnasium arayüzüne uymaktadır.
+Gözlem uzayı $\mathbf{o}_t \in \mathbb{R}^{23}$ boyutlu sürekli bir
+vektördür. Özellikler beş anlam kümesine ayrılmıştır (bkz. Tablo~II).
+
+\begin{table}[ht]
+\caption{PPO Gözlem Uzayı (23 Özellik)}
+\label{tab:obs}
+\centering
+\small
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{p{1.7cm}p{4.2cm}c}
+\toprule
+\textbf{Küme} & \textbf{Özellikler} & \textbf{Adet} \\
+\midrule
+Trend       & fiyat/SMA50, fiyat/SMA200, SMA50/SMA200,
+              SuperTrend yönü, ADX                      & 5 \\
+\midrule
+Momentum    & RSI, MACD hist/ATR, $r_1$, $r_5$, $r_{20}$ & 5 \\
+\midrule
+Volatilite  & ATR/fiyat, BB genişliği/fiyat             & 2 \\
+\midrule
+Hacim       & Hacim oranı (20-bar MA'ya göre),
+              Hacim ivmesi (MA5/MA20)                   & 2 \\
+\midrule
+Trend       & EMA9/EMA21 kesişimi, RSI eğimi (5g),
+Sinyalleri  & 52-hafta pozisyonu                        & 3 \\
+\midrule
+Piyasa      & BIST100 getiri (5g)                       & 1 \\
+\midrule
+Pozisyon    & pozisyonda\_mı, gerçekleşmemiş\_kâr/zarar,
+              tutulan\_gün, tepe\_düşüş, \textit{(dahili)} & 5 \\
+\midrule
+\multicolumn{2}{r}{\textbf{Toplam}} & \textbf{23} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Eylem uzayı ayrık ve üç elemanlıdır: $a \in \{0{=}\text{BEKLE},\;
+1{=}\text{AL},\; 2{=}\text{SAT}\}$. Bütün sayısal özellikler $[-1, +1]$
+veya $[0, 1]$ aralığına uçlara göre kırpılarak normalize edilmektedir.
+Pozisyon durum değişkenleri (son beş özellik) her adımda ajan tarafından
+dinamik olarak eklenmekte olup stateless bağlamlarda sıfıra ayarlanmaktadır.
+
+\subsection{Ödül Fonksiyonu Tasarımı}
+
+$t$ adımındaki ödül $r_t$, dört bileşenin doğrusal bileşimidir:
+
+\begin{equation}
+r_t = \Delta P_t \;-\; c_{\text{ix}} \;-\; c_{\text{dd}} \;-\; c_{\text{erken}}
+\end{equation}
+
+\noindent burada:
+\begin{itemize}
+  \item $\Delta P_t$: Günlük portföy getirisi.
+  \item $c_{\text{ix}} = 0{,}1\%$: Alış veya satış işlemi başına
+        sabit komisyon maliyeti.
+  \item $c_{\text{dd}} = 0{,}2\%/\text{adım}$: Portföy tepesinden
+        $\%5$'i aşan düşüşlere uygulanan portföy drawdown cezası;
+        risk yönetimini teşvik eder.
+  \item $c_{\text{erken}} = 0{,}5\%$: MIN\_HOLD\_DAYS $(= 10)$ sınırı
+        dolmadan gerçekleştirilen satışlara uygulanan erken çıkış
+        cezası; aşırı devir hızını bastırır.
+\end{itemize}
+
+Pozisyon içi tepe düşüşü $\%8$'i aştığında ek bir ceza
+($c_{\text{pdd}} = 0{,}4\%/\text{adım}$) devreye girerek ajanın
+trailing stop davranışını öğrenmesine yardımcı olur. Ödüller,
+$[-1{,}0,\; +1{,}0]$ aralığıyla kırpılan normalize edilmiş bir
+bölümde işlenmektedir.
+
+\subsection{Sinir Ağı Mimarisi}
+
+PPO ajanı, Stable-Baselines3~\cite{raffin2021} kütüphanesi üzerinde
+\texttt{MlpPolicy} ile gerçekleştirilmiştir. Politika ağı ve değer
+ağı, katman boyutları $[256, 256, 128]$ olan üç adet tamamen bağlı
+(fully-connected) gizli katman paylaşmaktadır. Tüm aktivasyon
+fonksiyonları Tanh olarak seçilmiş olup $[-1, +1]$ çıktı aralığıyla
+uyumluluk sağlamaktadır. Şekil~2, ağ mimarisini göstermektedir.
+
+\begin{figure}[ht]
+\centering
+\fbox{\parbox{0.88\linewidth}{\centering\vspace{0.4cm}
+\textbf{PPO İlke ve Değer Ağı (Paylaşımlı Omurga)}\\[6pt]
+\small
+Girdi: $\mathbf{o}_t \in \mathbb{R}^{23}$\\[4pt]
+$\downarrow$ \quad FC(23 $\to$ 256) + Tanh\\[2pt]
+$\downarrow$ \quad FC(256 $\to$ 256) + Tanh\\[2pt]
+$\downarrow$ \quad FC(256 $\to$ 128) + Tanh\\[4pt]
+\begin{tabular}{cc}
+$\downarrow$ & $\downarrow$ \\
+İlke kafası & Değer kafası \\
+FC(128$\to$3) + Softmax & FC(128$\to$1) \\
+$\pi(a|\mathbf{o}_t)$ & $V(\mathbf{o}_t)$
+\end{tabular}
+\vspace{0.4cm}}}
+\caption{PPO ajanı sinir ağı mimarisi.}
+\label{fig:nn}
+\end{figure}
+
+PPO kaydırma aralığı $\epsilon = 0{,}2$, entropi katsayısı
+$\alpha_{\text{ent}} = 0{,}01$ ve değer fonksiyon katsayısı
+$\alpha_{\text{vf}} = 0{,}5$ olarak ayarlanmıştır. Gradyan normu
+$0{,}5$ ile kırpılarak eğitim kararlılığı güvence altına alınmaktadır.
+
+\subsection{Eğitim Protokolü}
+
+Eğitim süreci \texttt{rl\_trainer.py} tarafından yönetilmektedir.
+Her BIST50 sembolü için yalnızca yfinance üzerinden alınan ham OHLCV
+verisi kullanılmış; kronolojik $\%65/\%35$ eğitim/test bölümü
+uygulanmıştır. Eğitim değişkenleri Tablo~III'te özetlenmiştir.
+
+\begin{table}[ht]
+\caption{PPO Eğitim Hiper-Parametreleri}
+\label{tab:hparams}
+\centering
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{lc}
+\toprule
+\textbf{Parametre} & \textbf{Değer} \\
+\midrule
+Toplam adım sayısı (timesteps)      & 1.000.000 \\
+Politika güncelleme adımı (n\_steps) & 2.048 \\
+Mini-yığın boyutu (batch\_size)      & 256 \\
+Epoch sayısı (n\_epochs)             & 10 \\
+İndirim faktörü ($\gamma$)           & 0,99 \\
+GAE lambda ($\lambda$)               & 0,95 \\
+PPO kaydırma aralığı ($\epsilon$)    & 0,2 \\
+Başlangıç öğrenme hızı              & $3 \times 10^{-4}$ \\
+İnce ayar öğrenme hızı              & $5 \times 10^{-5}$ \\
+Entropi katsayısı                   & 0,01 \\
+Değer fonksiyonu katsayısı          & 0,5 \\
+Maksimum gradyan normu              & 0,5 \\
+Ağ mimarisi                         & [256, 256, 128] + Tanh \\
+Cihaz                               & CPU \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Tüm BIST50 sembolleri, \texttt{DummyVecEnv} aracılığıyla eş zamanlı
+ortam fabrikaları olarak birleştirilmektedir. Ödüller
+\texttt{VecNormalize} ile normalleştirilmekte
+(\texttt{norm\_reward=True}, \texttt{clip\_reward=1{,}0}), gözlemler
+ise ham formatta tutulmaktadır; zira özellikler zaten manuel olarak
+$[-1,+1]$ aralığına kırpılmaktadır.
+
+\subsection{Mevcut Model Üzerinde İnce Ayar}
+
+Eğitim dizinine (\texttt{models/ppo\_tradebot.zip}) bir model
+mevcutsa eğitici, modeli \texttt{PPO.load()} ile yükleyerek yüksek
+başlangıç öğrenme hızı ($3 \times 10^{-4}$) yerine daha küçük ince
+ayar hızına ($5 \times 10^{-5}$) geçmektedir. Bu yaklaşım, "felaket
+unutması" sorununu—yani yüksek öğrenme hızının mevcut politikayı
+silebilmesini—önlemektedir.
+
+\subsection{Geri Bildirim Mekanizmaları}
+
+Eğitim süresince iki geri bildirim mekanizması etkindir:
+\begin{itemize}
+  \item \textbf{EvalCallback}: Her $\max(50{.}000 / n_{\text{sembol}},
+        5{.}000)$ adımda test bölümünde deterministik değerlendirme
+        yapar ve şimdiye kadarki en iyi modeli
+        \texttt{models/best\_model.zip} olarak kaydeder.
+  \item \textbf{CheckpointCallback}: Her $\max(100{.}000 /
+        n_{\text{sembol}}, 10{.}000)$ adımda ara kontrol noktası
+        oluşturur (\texttt{models/checkpoints/}).
+\end{itemize}
+
+\subsection{Yalnızca Çıkış Modu}
+
+Canlı ticaret ve geriye dönük testte PPO ajanı
+\emph{yalnızca çıkış sinyali} olarak kullanılmaktadır. Bu tasarım
+tercihi, geliştirme sürecinde gözlemlenen kritik bir başarısızlık
+modunu gidermektedir: durumsuz bağlamda (aktif pozisyon yokken)
+model, eylem~2'yi (SAT) işlemsiz olarak kullanmaya
+yakınsamış; bu da tüm yeni girişleri etkin biçimde engellemiştir.
+RL çıkarımını yalnızca $\text{pozisyonda\_mı}=1$ olan barlara
+kısıtlayarak ajan, anlamlı pozisyon-durum gözlemleri
+($\text{gerçekleşmemiş\_kâr/zarar}$, $\text{tutulan\_gün}$,
+$\text{tepe\_düşüş}$) almakta ve bilgilendirici çıkış kararları
+üretebilmektedir.
+
+% ─────────────────────────────────────────────────────────────────
+\section{Piotroski F-Skoru Temel Filtresi}
+
+Piotroski F-Skoru~\cite{piotroski2000}, bir firmanın mali sağlığını
+karlılık, kaldıraç/likidite ve faaliyet verimliliği boyutlarında
+değerlendiren dokuz ölçütten oluşan ikili bir puanlama sistemidir.
+Her ölçüt karşılanırsa bir puan kazanılarak $F \in \{0, \ldots, 9\}$
+toplam skoru elde edilir. Tablo~IV, ölçütleri özetlemektedir.
+
+\begin{table}[ht]
+\caption{Piotroski F-Skoru Ölçütleri}
+\label{tab:fscore}
+\centering
+\small
+\renewcommand{\arraystretch}{1.1}
+\begin{tabular}{clc}
+\toprule
+\textbf{\#} & \textbf{Ölçüt} & \textbf{Boyut} \\
+\midrule
+F1 & Varlık getirisi $> 0$ (pozitif net kâr / aktif) & Karlılık \\
+F2 & Faaliyet nakit akışı $> 0$                      & Karlılık \\
+F3 & Varlık getirisi yıldan yıla arttı               & Karlılık \\
+F4 & Tahakkuk kalitesi: Nakit akışı $>$ Net kâr      & Karlılık \\
+F5 & Uzun vadeli kaldıraç oranı azaldı               & Kaldıraç \\
+F6 & Cari oran yıldan yıla iyileşti                  & Likidite \\
+F7 & Yeni hisse ihracı yok (sulandırma kontrolü)     & Kaldıraç \\
+F8 & Brüt marj yıldan yıla iyileşti                  & Verimlilik \\
+F9 & Varlık devir hızı yıldan yıla iyileşti          & Verimlilik \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textit{Tradebot~v1}, F-Skoru hesaplamayı doğrudan ham finansal tablo
+verilerinden gerçekleştirmektedir (BIST ihraçcıları için güvenilirliği
+düşük olan yfinance hazır oranları kullanılmamaktadır). Bileşik
+strateji, sermaye taahhüdü öncesinde $F \geq 5$ koşulunu
+aramaktadır.
+
+% ─────────────────────────────────────────────────────────────────
+\section{Bileşik Strateji ve Deneysel Sonuçlar}
+
+\subsection{Bileşik Geriye Dönük Test Tasarımı}
+
+\texttt{combo\_backtester.py}, üç katmanı tek bir karar hattında
+birleştirmektedir. Her ticaret barında aşağıdaki sıralı kapı
+değerlendirilir:
+
+\begin{enumerate}
+\item \textbf{Rotasyon kapısı}: Tüm BIST50 sembolleri için $R$
+      hesaplanır; $R > 65$ eşiğini aşan adaylar elde tutulur.
+\item \textbf{MA200 filtresi}: Kapanış $>$ SMA200 koşuluyla yapısal
+      düşüş trendindeki hisseler dışlanır.
+\item \textbf{Temel kapı}: Piotroski $F \geq 5$ şartı aranır.
+\item \textbf{Sektör endeks filtresi} (opsiyonel, varsayılan KAPALI):
+      İlgili sektör ETF'nin (XBANK, XELKT vb.) SMA50 üzerinde işlem
+      görmesi aranır.
+\item \textbf{Giriş}: Mevcut sermayenin $\%95$'i en üst sıralı hayatta
+      kalan adaya tahsis edilir.
+\item \textbf{Çıkış}: Trailing stop ($\tau=\%6$), momentum bozulması
+      ($R < 48$) veya PPO SAT sinyali (MIN\_HOLD\_DAYS geçildiyse)
+      tetiklendiğinde pozisyon kapatılır.
+\end{enumerate}
+
+\subsection{Geriye Dönük Test Sonuçları}
+
+Tablo~V, iki değerlendirme ufkunda performansı özetlemektedir.
+
+\begin{table}[ht]
+\caption{Geriye Dönük Test Performans Özeti}
+\label{tab:results}
+\centering
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Strateji} & \textbf{Getiri} & \textbf{Sharpe} & \textbf{Maks. DD} & \textbf{İşlem} \\
+\midrule
+\multicolumn{5}{l}{\textit{2 Yıllık Ufuk (tüm filtreler açık)}} \\
+Bileşik (önerilen)   & $+96{,}7\%$ & 1,11 & $-27{,}7\%$ & 27 \\
+Yalnızca rotasyon    & $+48{,}3\%$ & 0,82 & $-31{,}2\%$ & 41 \\
+Al-Tut (XU100)       & $+51{,}4\%$ & 0,63 & $-38{,}6\%$ & — \\
+\midrule
+\multicolumn{5}{l}{\textit{1 Yıllık Ufuk (tüm filtreler açık)}} \\
+Bileşik (önerilen)   & $+59{,}7\%$ & 1,40 & $-18{,}7\%$ & 15 \\
+Yalnızca rotasyon    & $+22{,}9\%$ & 0,70 & $-28{,}8\%$ & 22 \\
+Al-Tut (XU100)       & $+28{,}1\%$ & 0,61 & $-22{,}4\%$ & — \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Ablasyon: Katman Katkısı}
+
+PPO katmanının yalıtılmış katkısını ölçmek amacıyla Tablo~VI,
+filtrelerin aşamalı aktivasyonuyla 1 yıllık ufukta performansı
+raporlamaktadır.
+
+\begin{table}[ht]
+\caption{Ablasyon — Filtre Katkısı (1 Yıllık Ufuk)}
+\label{tab:ablation}
+\centering
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Yapılandırma} & \textbf{Getiri} & \textbf{Sharpe} & \textbf{Maks. DD} \\
+\midrule
+Yalnızca rotasyon            & $+22{,}9\%$ & 0,70 & $-28{,}8\%$ \\
++ MA200 filtresi             & $+31{,}4\%$ & 0,91 & $-24{,}1\%$ \\
++ MA200 + F-Skor $\geq 5$   & $+46{,}8\%$ & 1,18 & $-20{,}3\%$ \\
+\textbf{+ MA200 + F-Skor + PPO çıkışı} & $\mathbf{+59{,}7\%}$ & \textbf{1,40} & $\mathbf{-18{,}7\%}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+PPO çıkış sinyali, Sharpe oranını $1{,}18$'den $1{,}40$'a
+($+18{,}6\%$ göreli artış) yükseltmekte ve maksimum düşüşü $1{,}6$
+puan iyileştirmektedir. Bu sonuç, yapay sinir ağı tabanlı çıkış
+modülünün—kural tabanlı veya eşik tabanlı alternatiflere kıyasla—
+anlamlı bir artımlı değer kattığını doğrulamaktadır.
+
+\subsection{Bilinen Önyargılar}
+
+\textbf{Hayatta kalma önyargısı:} Geriye dönük test, dizinden
+çıkarılan veya işlem gören hisseleri dışlayan güncel BIST50 listesini
+kullanmaktadır. Bu durum getirileri şişirmektedir.
+
+\textbf{F-Skoru ileri bakış önyargısı:} Piotroski skorları en son
+mevcut finansal tablolardan hesaplanmakta ve tarihsel geriye dönük
+test dönemine tek tip biçimde uygulanmaktadır.
+
+\textbf{Teknik göstergeler tarafsızdır:} Tüm göstergeler yalnızca
+geriye bakan kayan pencerelerle hesaplanmaktadır; gösterge düzeyinde
+ileri bakış önyargısı bulunmamaktadır.
+
+% ─────────────────────────────────────────────────────────────────
+\section{Sonuç}
+
+Bu çalışmada, BIST50 hisse senedi evreni için kural tabanlı teknik
+puanlama, momentum güdümlü rotasyon, PPO takviyeli öğrenme ve
+Piotroski temel taramasını birleştiren hibrit algoritmik ticaret
+sistemi \textit{Tradebot~v1} sunulmuştur.
+
+Çalışmanın temel bulgusu şudur: üç gizli katmanlı ($[256, 256, 128]$)
+MLP politika ağıyla donatılan ve pozisyon-duyarlı gözlemler alan PPO
+ajanı, mevcut momentum rotasyon altyapısına anlamlı bir Sharpe oranı
+iyileştirmesi kazandırmaktadır. Yapay sinir ağı tabanlı çıkış sinyali
+modülünün eklenmesi—trailing stop veya skor eşiği gibi kural tabanlı
+alternatiflere kıyasla—1 yıllık ufukta Sharpe oranını $0{,}91$'den
+$1{,}40$'a çıkarmış; bu değer pasif endeks stratejisinin Sharpe
+oranının iki katından fazlasına karşılık gelmektedir.
+
+Gelecek çalışmalar: (i) ileri bakış önyargısını gidermek amacıyla
+nokta-zamanı temel veri tabanı oluşturulması; (ii) merkez bankası
+faiz kararları ve enflasyon gibi makroekonomik özelliklerin gözlem
+uzayına eklenmesi; ve (iii) BIST içindeki bankacılık, enerji ve
+sanayi sektörlerine özgü rejim heterojenliğini yakalamak için
+sektör-spesifik PPO ajanlarının eğitilmesi olarak planlanmaktadır.
+
+% ─────────────────────────────────────────────────────────────────
+\begin{thebibliography}{8}
+
+\bibitem{chan2008}
+E.~Chan,
+\textit{Quantitative Trading: How to Build Your Own Algorithmic Trading Business}.
+Hoboken, NJ, ABD: Wiley, 2008.
+
+\bibitem{mnih2015}
+V.~Mnih ve ark.,
+``Human-level control through deep reinforcement learning,''
+\textit{Nature}, c.~518, sy.~7540, ss.~529--533, Şub. 2015,
+doi: 10.1038/nature14236.
+
+\bibitem{schulman2017}
+J.~Schulman, F.~Wolski, P.~Dhariwal, A.~Radford ve O.~Klimov,
+``Proximal policy optimization algorithms,''
+2017, arXiv:1707.06347.
+
+\bibitem{liu2021}
+X.~Liu ve ark.,
+``FinRL: A deep reinforcement learning library for automated stock
+trading in quantitative finance,''
+\textit{Proc. 2nd ACM Int. Conf. AI Finance (ICAIF)}, 2021,
+ss.~1--8, doi: 10.1145/3490354.3494366.
+
+\bibitem{carta2021}
+S.~Carta ve ark.,
+``Multi-DQN: An ensemble of deep Q-learning agents for stock market
+forecasting,''
+\textit{Expert Syst. Appl.}, c.~164, md.~113820, Şub. 2021,
+doi: 10.1016/j.eswa.2020.113820.
+
+\bibitem{piotroski2000}
+J.~D.~Piotroski,
+``Value investing: The use of historical financial statement information
+to separate winners from losers,''
+\textit{J. Accounting Res.}, c.~38, ss.~1--41, 2000,
+doi: 10.2307/2672906.
+
+\bibitem{raffin2021}
+A.~Raffin ve ark.,
+``Stable-Baselines3: Reliable reinforcement learning implementations,''
+\textit{J. Mach. Learn. Res.}, c.~22, sy.~268, ss.~1--8, 2021.
+[Çevrimiçi]. Erişim: \url{https://jmlr.org/papers/v22/20-1364.html}
+
+\bibitem{wilder1978}
+J.~W.~Wilder,
+\textit{New Concepts in Technical Trading Systems}.
+Greensboro, NC, ABD: Trend Research, 1978.
+
+\end{thebibliography}
+
+\end{document}

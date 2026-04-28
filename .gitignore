@@ -1,4 +1,23 @@
-models/
-.env
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+
+# Environment
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Project specific
+data/
+models/
+.claude/
+ml_dataset.csv
+*sim.joblib
+.ruff_cache/
+
+# OS generated files
+.DS_Store
+Thumbs.db
